@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <EditText
+        android:id="@+id/edit_server_ip"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Server IP" />
+
+    <EditText
+        android:id="@+id/edit_server_port"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="Server port"
+        android:layout_below="@id/edit_server_ip"
+        android:layout_alignParentStart="true"/>
+
+    <EditText
+        android:id="@+id/edit_server_rtmp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="rtmp://server_ip:1935/live/dji_mavic"
+        android:layout_below="@id/edit_server_port"
+        android:layout_alignParentStart="true"/>
+
+</RelativeLayout>

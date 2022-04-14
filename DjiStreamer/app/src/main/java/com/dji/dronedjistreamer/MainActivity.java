@@ -1,6 +1,8 @@
 package com.dji.dronedjistreamer;
 
 import android.Manifest;
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -12,6 +14,7 @@ import android.widget.Toast;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 
+import com.dji.dronedjistreamer.internal.utils.ServerIPDialog;
 import com.dji.dronedjistreamer.internal.utils.ToastUtils;
 import com.dji.dronedjistreamer.internal.utils.VideoFeedView;
 
@@ -37,7 +40,7 @@ import dji.thirdparty.org.java_websocket.handshake.ServerHandshake;
 import dji.common.flightcontroller.LocationCoordinate3D;
 import dji.ux.widget.FPVWidget;
 
-public class MainActivity extends AppCompatActivity implements View.OnClickListener {
+public class MainActivity extends AppCompatActivity implements View.OnClickListener, ServerIPDialog.ServerIPDialogListener {
 
     private static final String TAG = MainActivity.class.getName();
 
@@ -46,8 +49,15 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     public static WebSocketClient webSocketClient;
     private Button startLiveShowBtn;
     private Button stopLiveShowBtn;
-    private Button isLiveShowOnBtn;
-    private Button showInfoBtn;
+//    private Button isLiveShowOnBtn;
+//    private Button showInfoBtn;
+    private Button setServerIPBtn;
+
+    private SharedPreferences sharedPreferences;
+
+    private String serverIP = "";
+    private String serverPort = "";
+    private String serverRTMP = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -71,51 +81,61 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
         setContentView(R.layout.activity_main);
 
-        if(webSocketClient == null) {
-            createWebSocketClient();
-            webSocketClient.connect();
-        }
+        sharedPreferences = getSharedPreferences("UserPrefs", Context.MODE_PRIVATE);
+        serverIP = sharedPreferences.getString("serverIP", "");
+        serverPort = sharedPreferences.getString("serverPort", "");
+        serverRTMP = sharedPreferences.getString("serverRTMP", "rtmp://" + (serverIP.isEmpty() ? "server_ip" : serverIP) + ":1935/live/dji_mavic");
 
+        if(!serverIP.isEmpty() && !serverPort.isEmpty()) {
+            connectToServer(serverIP, serverPort);
+//            if(webSocketClient == null) {
+//                createWebSocketClient(serverIP, serverPort);
+//                webSocketClient.connect();
+//            }
+        }
 //        Aircraft aircraft = (Aircraft) DJISDKManager.getInstance().getProduct();
 //        FlightController flightController = aircraft.getFlightController();
 
-        Handler handler = new Handler();
-        int delay = 100;
-        //DJISDKManager.getInstance().getFlightHubManager().getAircraftRealTimeFlightData();
-        handler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                //LocationCoordinate3D location = flightController.getState().getAircraftLocation();
-                //webSocketClient.send("DJI: altitude: " + location.getAltitude() + " | latitude: " + location.getLatitude() + " | longitude: " + location.getLongitude());
-                if(DJISDKManager.getInstance() != null) {
-                    if(DJISDKManager.getInstance().getProduct() != null) {
-                        Aircraft aircraft = (Aircraft) DJISDKManager.getInstance().getProduct();
-                        FlightControllerState state = aircraft.getFlightController().getState();
-                        LocationCoordinate3D location = state.getAircraftLocation();
-                        Attitude attitude = state.getAttitude();
-                        float compass = aircraft.getFlightController().getCompass().getHeading();
+//        Handler handler = new Handler();
+//        int delay = 100;
+//        //DJISDKManager.getInstance().getFlightHubManager().getAircraftRealTimeFlightData();
+//        handler.postDelayed(new Runnable() {
+//            @Override
+//            public void run() {
+//                //LocationCoordinate3D location = flightController.getState().getAircraftLocation();
+//                //webSocketClient.send("DJI: altitude: " + location.getAltitude() + " | latitude: " + location.getLatitude() + " | longitude: " + location.getLongitude());
+//                if(DJISDKManager.getInstance() != null) {
+//                    if(DJISDKManager.getInstance().getProduct() != null) {
+//                        Aircraft aircraft = (Aircraft) DJISDKManager.getInstance().getProduct();
+//                        FlightControllerState state = aircraft.getFlightController().getState();
+//                        LocationCoordinate3D location = state.getAircraftLocation();
+//                        Attitude attitude = state.getAttitude();
+//                        float compass = aircraft.getFlightController().getCompass().getHeading();
+//
+//                        webSocketClient.send("{\"DroneId\":\"DJI-" + aircraft.getModel() + "\",\"Altitude\":" + location.getAltitude() + ",\"Latitude\":"
+//                                + location.getLatitude() + ",\"Longitude\":" + location.getLongitude()
+//                                + ",\"Pitch\":" + attitude.pitch + ",\"Roll\":" + attitude.roll + ",\"Yaw\":" + attitude.yaw
+//                                + ",\"Compass\":" + compass
+//                                + ",\"VelocityX\":" + state.getVelocityX() + ",\"VelocityY\":" + state.getVelocityY() + ",\"VelocityZ\":" + state.getVelocityZ() + "}");
+//                    }
+//                }
+//                handler.postDelayed(this, delay);
+//            }
+//        }, delay);
 
-                        webSocketClient.send("{\"DroneId\":\"DJI-" + aircraft.getModel() + "\",\"Altitude\":" + location.getAltitude() + ",\"Latitude\":"
-                                + location.getLatitude() + ",\"Longitude\":" + location.getLongitude()
-                                + ",\"Pitch\":" + attitude.pitch + ",\"Roll\":" + attitude.roll + ",\"Yaw\":" + attitude.yaw
-                                + ",\"Compass\":" + compass + "}");
-                    }
-                }
-                handler.postDelayed(this, delay);
-            }
-        }, delay);
         ToastUtils.setResultToToast("MainActivity");
-
 
         startLiveShowBtn = (Button) findViewById(R.id.btn_start_live_show);
         stopLiveShowBtn = (Button) findViewById(R.id.btn_stop_live_show);
-        isLiveShowOnBtn = (Button) findViewById(R.id.btn_is_live_show_on);
-        showInfoBtn = (Button) findViewById(R.id.btn_show_info);
+//        isLiveShowOnBtn = (Button) findViewById(R.id.btn_is_live_show_on);
+//        showInfoBtn = (Button) findViewById(R.id.btn_show_info);
+        setServerIPBtn = (Button) findViewById(R.id.btn_set_server_ip);
 
         startLiveShowBtn.setOnClickListener(this);
         stopLiveShowBtn.setOnClickListener(this);
-        isLiveShowOnBtn.setOnClickListener(this);
-        showInfoBtn.setOnClickListener(this);
+//        isLiveShowOnBtn.setOnClickListener(this);
+//        showInfoBtn.setOnClickListener(this);
+        setServerIPBtn.setOnClickListener(this);
 
         listener = new LiveStreamManager.OnLiveChangeListener() {
             @Override
@@ -163,7 +183,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         new Thread() {
             @Override
             public void run() {
-                DJISDKManager.getInstance().getLiveStreamManager().setLiveUrl(liveShowUrl);
+                DJISDKManager.getInstance().getLiveStreamManager().setLiveUrl(serverRTMP);
                 int result = DJISDKManager.getInstance().getLiveStreamManager().startStream();
                 DJISDKManager.getInstance().getLiveStreamManager().setStartTime();
 
@@ -212,11 +232,52 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         return true;
     }
 
+    private void openServerIPDialog() {
+        ServerIPDialog serverIPDialog = new ServerIPDialog();
+        serverIPDialog.SetHint(serverIP, serverPort, serverRTMP);
+        serverIPDialog.show(getSupportFragmentManager(), "server ip dialog");
+    }
 
-    public static void createWebSocketClient() {
+    private void connectToServer(String ip, String port) {
+        createWebSocketClient(ip, port);
+
+        webSocketClient.connect();
+
+        Handler handler = new Handler();
+        int delay = 100;
+        //DJISDKManager.getInstance().getFlightHubManager().getAircraftRealTimeFlightData();
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                //LocationCoordinate3D location = flightController.getState().getAircraftLocation();
+                //webSocketClient.send("DJI: altitude: " + location.getAltitude() + " | latitude: " + location.getLatitude() + " | longitude: " + location.getLongitude());
+                if(DJISDKManager.getInstance() != null) {
+                    if(DJISDKManager.getInstance().getProduct() != null) {
+                        Aircraft aircraft = (Aircraft) DJISDKManager.getInstance().getProduct();
+                        FlightControllerState state = aircraft.getFlightController().getState();
+                        LocationCoordinate3D location = state.getAircraftLocation();
+                        Attitude attitude = state.getAttitude();
+                        float compass = aircraft.getFlightController().getCompass().getHeading();
+
+                        webSocketClient.send("{\"DroneId\":\"DJI-" + aircraft.getModel() + "\",\"Altitude\":" + location.getAltitude() + ",\"Latitude\":"
+                                + location.getLatitude() + ",\"Longitude\":" + location.getLongitude()
+                                + ",\"Pitch\":" + attitude.pitch + ",\"Roll\":" + attitude.roll + ",\"Yaw\":" + attitude.yaw
+                                + ",\"Compass\":" + compass
+                                + ",\"VelocityX\":" + state.getVelocityX() + ",\"VelocityY\":" + state.getVelocityY() + ",\"VelocityZ\":" + state.getVelocityZ() + "}");
+                    }
+                }
+                handler.postDelayed(this, delay);
+            }
+        }, delay);
+
+        ToastUtils.setResultToToast("Connection established, sending flight data.");
+    }
+
+    public static void createWebSocketClient(String ip, String port) {
         URI uri;
         try {
-            uri = new URI("ws://147.229.14.181:5555");
+            //uri = new URI("ws://147.229.14.181:5555");
+            uri = new URI("ws://" + ip + ":" + port);
             //uri = new URI("ws://10.42.0.1:5555");
         } catch (URISyntaxException e) {
             e.printStackTrace();
@@ -227,6 +288,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             @Override
             public void onOpen(ServerHandshake serverHandshake) {
                 Log.i(TAG, "Connected to the DroCo server.");
+                ToastUtils.setResultToToast("Connected to the DroCo server.");
             }
 
             @Override
@@ -237,6 +299,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             @Override
             public void onClose(int i, String s, boolean b) {
                 Log.i(TAG, "Connection to the DroCo server closed.");
+                ToastUtils.setResultToToast("Connection to the DroCo server closed.");
             }
 
             @Override
@@ -256,13 +319,31 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             case R.id.btn_stop_live_show:
                 stopLiveShow();
                 break;
-            case R.id.btn_is_live_show_on:
-                isLiveShowOn();
-                break;
-            case R.id.btn_show_info:
-                showInfo();
+//            case R.id.btn_is_live_show_on:
+//                isLiveShowOn();
+//                break;
+//            case R.id.btn_show_info:
+//                showInfo();
+//                break;
+            case R.id.btn_set_server_ip:
+                openServerIPDialog();
                 break;
         }
+    }
+
+    @Override
+    public void applyInputs(String ip, String port, String rtmp) {
+        SharedPreferences.Editor editor = sharedPreferences.edit();
+        editor.putString("serverIP", ip);
+        editor.putString("serverPort", port);
+        editor.putString("serverRTMP", rtmp);
+        editor.commit();
+
+        serverIP = ip;
+        serverPort = port;
+        serverRTMP = rtmp;
+
+        connectToServer(ip, port);
     }
 }
 

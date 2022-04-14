@@ -109,7 +109,7 @@ public class DemoApplication extends Application {
 
                 }
                 Log.e("TAG", error.toString());
-                updateAircraftFlightData("DJI onRegister");
+                //updateAircraftFlightData("DJI onRegister");
             }
 
             @Override
@@ -117,14 +117,14 @@ public class DemoApplication extends Application {
                 Log.d("TAG", "onProductDisconnect");
                 Toast.makeText(getApplicationContext(), "onProductDisconnect", Toast.LENGTH_LONG).show();
                 notifyStatusChange();
-                updateAircraftFlightData("DJI onProductDisconnected");
+                //updateAircraftFlightData("DJI onProductDisconnected");
             }
             @Override
             public void onProductConnect(BaseProduct baseProduct) {
                 Log.d("TAG", String.format("onProductConnect newProduct:%s", baseProduct));
                 Toast.makeText(getApplicationContext(), "onProductConnect", Toast.LENGTH_LONG).show();
                 notifyStatusChange();
-                updateAircraftFlightData("DJI onProductConnected");
+                //updateAircraftFlightData("DJI onProductConnected");
             }
 
             @Override
@@ -132,7 +132,7 @@ public class DemoApplication extends Application {
                 Log.d("TAG", String.format("onProductChanged newProduct:%s", baseProduct));
                 Toast.makeText(getApplicationContext(), "onProductChanged", Toast.LENGTH_LONG).show();
                 notifyStatusChange();
-                updateAircraftFlightData("DJI onProductChanged");
+                //updateAircraftFlightData("DJI onProductChanged");
             }
             @Override
             public void onComponentChange(BaseProduct.ComponentKey componentKey, BaseComponent oldComponent,
@@ -169,28 +169,28 @@ public class DemoApplication extends Application {
 
     }
 
-    private void updateAircraftFlightData(String msg) {
-//                Aircraft aircraft = (Aircraft) baseProduct;
-//                FlightController flightController = aircraft.getFlightController();
-
-        if (MainActivity.webSocketClient == null) {
-            MainActivity.createWebSocketClient();
-            MainActivity.webSocketClient.connect();
-        }
-
-        Handler handler = new Handler();
-        int delay = 1000;
-        //DJISDKManager.getInstance().getFlightHubManager().getAircraftRealTimeFlightData();
-        handler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                //LocationCoordinate3D location = flightController.getState().getAircraftLocation();
-                //MainActivity.webSocketClient.send("DJI: altitude: " + location.getAltitude() + " | latitude: " + location.getLatitude() + " | longitude: " + location.getLongitude());
-                MainActivity.webSocketClient.send(msg);
-                handler.postDelayed(this, delay);
-            }
-        }, delay);
-    }
+//    private void updateAircraftFlightData(String msg) {
+////                Aircraft aircraft = (Aircraft) baseProduct;
+////                FlightController flightController = aircraft.getFlightController();
+//
+//        if (MainActivity.webSocketClient == null) {
+//            MainActivity.createWebSocketClient();
+//            MainActivity.webSocketClient.connect();
+//        }
+//
+//        Handler handler = new Handler();
+//        int delay = 1000;
+//        //DJISDKManager.getInstance().getFlightHubManager().getAircraftRealTimeFlightData();
+//        handler.postDelayed(new Runnable() {
+//            @Override
+//            public void run() {
+//                //LocationCoordinate3D location = flightController.getState().getAircraftLocation();
+//                //MainActivity.webSocketClient.send("DJI: altitude: " + location.getAltitude() + " | latitude: " + location.getLatitude() + " | longitude: " + location.getLongitude());
+//                MainActivity.webSocketClient.send(msg);
+//                handler.postDelayed(this, delay);
+//            }
+//        }, delay);
+//    }
 
     private void loginAccount(){
 
