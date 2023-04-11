@@ -1,6 +1,7 @@
 package com.dji.dronedjistreamer;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
@@ -11,8 +12,10 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 import com.dji.dronedjistreamer.internal.utils.ServerIPDialog;
 import com.dji.dronedjistreamer.internal.utils.ToastUtils;
@@ -20,22 +23,30 @@ import com.dji.dronedjistreamer.internal.utils.VideoFeedView;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.nio.channels.NotYetConnectedException;
+import java.text.SimpleDateFormat;
+import java.util.Calendar;
+import java.util.Date;
 import java.util.Timer;
 import java.util.TimerTask;
 
 import dji.common.error.DJIError;
 import dji.common.flightcontroller.Attitude;
 import dji.common.flightcontroller.FlightControllerState;
+import dji.common.gimbal.GimbalState;
 import dji.common.useraccount.UserAccountState;
 import dji.common.util.CommonCallbacks;
 import dji.keysdk.FlightControllerKey;
 import dji.sdk.camera.VideoFeeder;
 import dji.sdk.flightcontroller.FlightController;
+import dji.sdk.gimbal.Gimbal;
 import dji.sdk.products.Aircraft;
 import dji.sdk.sdkmanager.DJISDKManager;
 import dji.sdk.sdkmanager.LiveStreamManager;
 import dji.sdk.useraccount.UserAccountManager;
+import dji.thirdparty.org.java_websocket.WebSocket;
 import dji.thirdparty.org.java_websocket.client.WebSocketClient;
+import dji.thirdparty.org.java_websocket.exceptions.WebsocketNotConnectedException;
 import dji.thirdparty.org.java_websocket.handshake.ServerHandshake;
 import dji.common.flightcontroller.LocationCoordinate3D;
 import dji.ux.widget.FPVWidget;
@@ -58,6 +69,11 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private String serverIP = "";
     private String serverPort = "";
     private String serverRTMP = "";
+
+    private GimbalState gimbalState;
+
+    private Handler connectionHandler;
+    private final int connectionRetry = 1000;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -85,6 +101,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         serverIP = sharedPreferences.getString("serverIP", "");
         serverPort = sharedPreferences.getString("serverPort", "");
         serverRTMP = sharedPreferences.getString("serverRTMP", "rtmp://" + (serverIP.isEmpty() ? "server_ip" : serverIP) + ":1935/live/dji_mavic");
+
+        connectionHandler = new Handler();
 
         if(!serverIP.isEmpty() && !serverPort.isEmpty()) {
             connectToServer(serverIP, serverPort);
@@ -239,12 +257,63 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
     private void connectToServer(String ip, String port) {
+        if(webSocketClient != null) {
+            if(webSocketClient.getReadyState() == WebSocket.READYSTATE.OPEN) {
+                webSocketClient.close();
+            }
+        }
+
+        // Stop all previous connection attempts
+        connectionHandler.removeCallbacksAndMessages(null);
+
+        // Create new websocket client
         createWebSocketClient(ip, port);
 
-        webSocketClient.connect();
+        connectionHandler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                Log.d("WEBSOCKET_STATE", webSocketClient.getReadyState().toString());
 
+                // If the websocket is not connected, repeat the connection process
+                if(webSocketClient.getReadyState() != WebSocket.READYSTATE.OPEN) {
+                    if(webSocketClient.getReadyState() == WebSocket.READYSTATE.CLOSED) {
+                        // Recreate websocket client
+                        createWebSocketClient(ip, port);
+                    }
+                    webSocketClient.connect();
+
+                    connectionHandler.postDelayed(this, connectionRetry);
+                }
+            }
+        }, connectionRetry);
+    }
+
+    private void sendFlightData() {
         Handler handler = new Handler();
         int delay = 100;
+
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                boolean stop = false;
+                if(DJISDKManager.getInstance() != null) {
+                    if(DJISDKManager.getInstance().getProduct() != null) {
+                        Gimbal gimbal = DJISDKManager.getInstance().getProduct().getGimbal();
+                        gimbal.setStateCallback(new GimbalState.Callback() {
+                            @Override
+                            public void onUpdate(@NonNull GimbalState state) {
+                                gimbalState = state;
+                            }
+                        });
+                        stop = true;
+                    }
+                }
+                if (!stop) {
+                    handler.postDelayed(this, delay);
+                }
+            }
+        }, delay);
+
         //DJISDKManager.getInstance().getFlightHubManager().getAircraftRealTimeFlightData();
         handler.postDelayed(new Runnable() {
             @Override
@@ -258,22 +327,32 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                         LocationCoordinate3D location = state.getAircraftLocation();
                         Attitude attitude = state.getAttitude();
                         float compass = aircraft.getFlightController().getCompass().getHeading();
+                        float altitude = state.getTakeoffLocationAltitude() + location.getAltitude();
+                        dji.common.gimbal.Attitude gimbalAttitude = gimbalState.getAttitudeInDegrees();
+                        Date currentTime = Calendar.getInstance().getTime();
+                        SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
 
-                        webSocketClient.send("{\"DroneId\":\"DJI-" + aircraft.getModel() + "\",\"Altitude\":" + location.getAltitude() + ",\"Latitude\":"
-                                + location.getLatitude() + ",\"Longitude\":" + location.getLongitude()
-                                + ",\"Pitch\":" + attitude.pitch + ",\"Roll\":" + attitude.roll + ",\"Yaw\":" + attitude.yaw
-                                + ",\"Compass\":" + compass
-                                + ",\"VelocityX\":" + state.getVelocityX() + ",\"VelocityY\":" + state.getVelocityY() + ",\"VelocityZ\":" + state.getVelocityZ() + "}");
+                        if (webSocketClient.getReadyState() == WebSocket.READYSTATE.OPEN) {
+                            webSocketClient.send("{\"DroneId\":\"DJI-" + aircraft.getModel() + "\",\"Altitude\":" +
+                                    location.getAltitude() + ",\"Latitude\":"
+                                    + location.getLatitude() + ",\"Longitude\":" + location.getLongitude()
+                                    + ",\"Pitch\":" + attitude.pitch + ",\"Roll\":" + attitude.roll + ",\"Yaw\":" + attitude.yaw
+                                    + ",\"Compass\":" + compass
+                                    + ",\"VelocityX\":" + state.getVelocityX() + ",\"VelocityY\":" + state.getVelocityY() + ",\"VelocityZ\":" + state.getVelocityZ()
+                                    + ",\"GimbalPitch\":" + gimbalAttitude.getPitch() + ",\"GimbalRoll\":" + gimbalAttitude.getRoll() + ",\"GimbalYaw\":" + gimbalAttitude.getYaw()
+                                    + ",\"GimbalYawRelative\":" + gimbalState.getYawRelativeToAircraftHeading()
+                                    + ",\"TimeStamp\":" + timestampFormat.format(currentTime) + "}");
+                        }
                     }
                 }
-                handler.postDelayed(this, delay);
+                if(webSocketClient.getReadyState() == WebSocket.READYSTATE.OPEN) {
+                    handler.postDelayed(this, delay);
+                }
             }
         }, delay);
-
-        ToastUtils.setResultToToast("Connection established, sending flight data.");
     }
 
-    public static void createWebSocketClient(String ip, String port) {
+    public void createWebSocketClient(String ip, String port) {
         URI uri;
         try {
             //uri = new URI("ws://147.229.14.181:5555");
@@ -289,6 +368,13 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             public void onOpen(ServerHandshake serverHandshake) {
                 Log.i(TAG, "Connected to the DroCo server.");
                 ToastUtils.setResultToToast("Connected to the DroCo server.");
+                // If app successfully connected to the server, start sending flight data
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        sendFlightData();
+                    }
+                });
             }
 
             @Override
