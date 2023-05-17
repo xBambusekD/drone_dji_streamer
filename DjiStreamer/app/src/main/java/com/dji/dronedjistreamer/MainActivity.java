@@ -318,7 +318,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private double getTakeoffElevationFromGoogleMaps(double latitude, double longitude) {
         double result = Double.NaN;
         try {
-            URL url = new URL("https://maps.googleapis.com/maps/api/elevation/json?locations=" + latitude + "%2C" + longitude + "&key=AIzaSyB3a5kGz56huz3xwPGRSzKKOSmEKDnmOvc");
+            URL url = new URL("https://maps.googleapis.com/maps/api/elevation/json?locations=" + latitude + "%2C" + longitude + "&key=API_KEY");
             HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
             urlConnection.setRequestMethod("GET");
             int responseCode = urlConnection.getResponseCode();
