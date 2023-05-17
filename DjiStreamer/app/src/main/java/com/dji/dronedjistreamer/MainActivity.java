@@ -345,7 +345,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 //        RequestBody body = RequestBody.create("", mediaType);
 //        HttpGet
 //        Request request = new Request.Builder()
-//                .url("https://maps.googleapis.com/maps/api/elevation/json?locations=" + latitude + "%2C" + longitude + "&key=AIzaSyB3a5kGz56huz3xwPGRSzKKOSmEKDnmOvc")
+//                .url("https://maps.googleapis.com/maps/api/elevation/json?locations=" + latitude + "%2C" + longitude + "&key=API_KEY")
 //                .method("GET", null)
 //                .build();
 //        try (Response response = client.newCall(request).execute()) {
