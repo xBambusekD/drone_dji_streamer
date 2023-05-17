@@ -2,6 +2,7 @@ apply plugin: 'com.android.application'
 
 repositories {
     mavenLocal()
+    mavenCentral()
 }
 
 android {
@@ -98,6 +99,8 @@ dependencies {
 
     //implementation 'tech.gusavila92:java-android-websocket-client:1.2.2'
 
+    implementation 'com.google.maps:google-maps-services:2.2.0'
+    implementation 'org.slf4j:slf4j-simple:1.7.25'
 }
 
 // Please uncomment the following code if you use your own sdk version.

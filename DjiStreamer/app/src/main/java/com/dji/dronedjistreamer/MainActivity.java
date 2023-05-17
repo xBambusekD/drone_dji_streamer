@@ -1,57 +1,76 @@
 package com.dji.dronedjistreamer;
 
 import android.Manifest;
-import android.app.Activity;
 import android.content.Context;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.PorterDuff;
+import android.graphics.SurfaceTexture;
+import android.media.Image;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Debug;
 import android.os.Handler;
 import android.util.Log;
+import android.view.SurfaceView;
+import android.view.TextureView;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.Button;
-import android.widget.Toast;
+import android.widget.ImageView;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 
 import com.dji.dronedjistreamer.internal.utils.ServerIPDialog;
 import com.dji.dronedjistreamer.internal.utils.ToastUtils;
-import com.dji.dronedjistreamer.internal.utils.VideoFeedView;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.BufferedInputStream;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.nio.channels.NotYetConnectedException;
+import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
-import java.util.Timer;
-import java.util.TimerTask;
 
 import dji.common.error.DJIError;
 import dji.common.flightcontroller.Attitude;
 import dji.common.flightcontroller.FlightControllerState;
 import dji.common.gimbal.GimbalState;
-import dji.common.useraccount.UserAccountState;
 import dji.common.util.CommonCallbacks;
-import dji.keysdk.FlightControllerKey;
-import dji.sdk.camera.VideoFeeder;
-import dji.sdk.flightcontroller.FlightController;
 import dji.sdk.gimbal.Gimbal;
 import dji.sdk.products.Aircraft;
 import dji.sdk.sdkmanager.DJISDKManager;
 import dji.sdk.sdkmanager.LiveStreamManager;
-import dji.sdk.useraccount.UserAccountManager;
 import dji.thirdparty.org.java_websocket.WebSocket;
 import dji.thirdparty.org.java_websocket.client.WebSocketClient;
-import dji.thirdparty.org.java_websocket.exceptions.WebsocketNotConnectedException;
 import dji.thirdparty.org.java_websocket.handshake.ServerHandshake;
 import dji.common.flightcontroller.LocationCoordinate3D;
+import dji.thirdparty.sanselan.util.IOUtils;
 import dji.ux.widget.FPVWidget;
+import okhttp3.HttpUrl;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 
-public class MainActivity extends AppCompatActivity implements View.OnClickListener, ServerIPDialog.ServerIPDialogListener {
+public class MainActivity extends AppCompatActivity implements View.OnClickListener, ServerIPDialog.ServerIPDialogListener, AircraftStatusReceiver.AircraftStatusListener {
 
     private static final String TAG = MainActivity.class.getName();
 
@@ -63,17 +82,42 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 //    private Button isLiveShowOnBtn;
 //    private Button showInfoBtn;
     private Button setServerIPBtn;
+    private Button startRecordingBtn;
+    private Button startFlightRecordingBtn;
+    private Button startCarDetectorBtn;
+    private ImageView videoViewRectangles;
+    private Canvas videoViewCanvas;
+    private FPVWidget fpvView;
 
     private SharedPreferences sharedPreferences;
 
     private String serverIP = "";
     private String serverPort = "";
-    private String serverRTMP = "";
+    //private String serverRTMP = "";
 
     private GimbalState gimbalState;
 
     private Handler connectionHandler;
     private final int connectionRetry = 1000;
+
+    private Aircraft aircraft;
+    private String aircraftSerialNumber;
+
+    private boolean aircraftConnected = false;
+
+    AircraftStatusReceiver djiStatusReceiver;
+
+    private String clientID;
+    private String rtmpURL;
+
+    private boolean recordingOn = false;
+    private boolean flightRecordingOn = false;
+    private boolean carDetector = false;
+
+    private double takeoffAltitude = Double.NaN;
+    private double latestKnownLatitude = 49.22727;
+    private double latestKnownLongitude = 16.59721;
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -96,64 +140,39 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         }
 
         setContentView(R.layout.activity_main);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         sharedPreferences = getSharedPreferences("UserPrefs", Context.MODE_PRIVATE);
         serverIP = sharedPreferences.getString("serverIP", "");
         serverPort = sharedPreferences.getString("serverPort", "");
-        serverRTMP = sharedPreferences.getString("serverRTMP", "rtmp://" + (serverIP.isEmpty() ? "server_ip" : serverIP) + ":1935/live/dji_mavic");
 
         connectionHandler = new Handler();
 
-        if(!serverIP.isEmpty() && !serverPort.isEmpty()) {
-            connectToServer(serverIP, serverPort);
-//            if(webSocketClient == null) {
-//                createWebSocketClient(serverIP, serverPort);
-//                webSocketClient.connect();
-//            }
-        }
-//        Aircraft aircraft = (Aircraft) DJISDKManager.getInstance().getProduct();
-//        FlightController flightController = aircraft.getFlightController();
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(DemoApplication.FLAG_AIRCRAFT_CONNECTED);
+        filter.addAction(DemoApplication.FLAG_AIRCRAFT_DISCONNECTED);
+        filter.addAction(DemoApplication.FLAG_PRODUCT_CHANGED);
+        filter.addAction(DemoApplication.FLAG_COMPONENT_CONNECTIVITY_CHANGED);
 
-//        Handler handler = new Handler();
-//        int delay = 100;
-//        //DJISDKManager.getInstance().getFlightHubManager().getAircraftRealTimeFlightData();
-//        handler.postDelayed(new Runnable() {
-//            @Override
-//            public void run() {
-//                //LocationCoordinate3D location = flightController.getState().getAircraftLocation();
-//                //webSocketClient.send("DJI: altitude: " + location.getAltitude() + " | latitude: " + location.getLatitude() + " | longitude: " + location.getLongitude());
-//                if(DJISDKManager.getInstance() != null) {
-//                    if(DJISDKManager.getInstance().getProduct() != null) {
-//                        Aircraft aircraft = (Aircraft) DJISDKManager.getInstance().getProduct();
-//                        FlightControllerState state = aircraft.getFlightController().getState();
-//                        LocationCoordinate3D location = state.getAircraftLocation();
-//                        Attitude attitude = state.getAttitude();
-//                        float compass = aircraft.getFlightController().getCompass().getHeading();
-//
-//                        webSocketClient.send("{\"DroneId\":\"DJI-" + aircraft.getModel() + "\",\"Altitude\":" + location.getAltitude() + ",\"Latitude\":"
-//                                + location.getLatitude() + ",\"Longitude\":" + location.getLongitude()
-//                                + ",\"Pitch\":" + attitude.pitch + ",\"Roll\":" + attitude.roll + ",\"Yaw\":" + attitude.yaw
-//                                + ",\"Compass\":" + compass
-//                                + ",\"VelocityX\":" + state.getVelocityX() + ",\"VelocityY\":" + state.getVelocityY() + ",\"VelocityZ\":" + state.getVelocityZ() + "}");
-//                    }
-//                }
-//                handler.postDelayed(this, delay);
-//            }
-//        }, delay);
-
-        ToastUtils.setResultToToast("MainActivity");
+        djiStatusReceiver = new AircraftStatusReceiver(this);
+        registerReceiver(djiStatusReceiver, filter);
 
         startLiveShowBtn = (Button) findViewById(R.id.btn_start_live_show);
         stopLiveShowBtn = (Button) findViewById(R.id.btn_stop_live_show);
-//        isLiveShowOnBtn = (Button) findViewById(R.id.btn_is_live_show_on);
-//        showInfoBtn = (Button) findViewById(R.id.btn_show_info);
         setServerIPBtn = (Button) findViewById(R.id.btn_set_server_ip);
+        startRecordingBtn = (Button) findViewById(R.id.btn_start_recording);
+        startFlightRecordingBtn = (Button) findViewById(R.id.btn_flight_data_recording);
+        startCarDetectorBtn = (Button) findViewById(R.id.btn_start_car_detector);
 
         startLiveShowBtn.setOnClickListener(this);
         stopLiveShowBtn.setOnClickListener(this);
-//        isLiveShowOnBtn.setOnClickListener(this);
-//        showInfoBtn.setOnClickListener(this);
         setServerIPBtn.setOnClickListener(this);
+        startRecordingBtn.setOnClickListener(this);
+        startFlightRecordingBtn.setOnClickListener(this);
+        startCarDetectorBtn.setOnClickListener(this);
+
+        videoViewRectangles = (ImageView) findViewById(R.id.video_view_rectangles);
+        fpvView = (FPVWidget) findViewById(R.id.video_view_fpv_video_feed);
 
         listener = new LiveStreamManager.OnLiveChangeListener() {
             @Override
@@ -161,6 +180,14 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 ToastUtils.setResultToToast("status changed : " + i);
             }
         };
+    }
+
+    public void AircraftConnected() {
+
+    }
+
+    public void AircraftDisconnected() {
+
     }
 
     @Override
@@ -201,7 +228,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         new Thread() {
             @Override
             public void run() {
-                DJISDKManager.getInstance().getLiveStreamManager().setLiveUrl(serverRTMP);
+                DJISDKManager.getInstance().getLiveStreamManager().setLiveUrl(rtmpURL);
                 int result = DJISDKManager.getInstance().getLiveStreamManager().startStream();
                 DJISDKManager.getInstance().getLiveStreamManager().setStartTime();
 
@@ -252,7 +279,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
     private void openServerIPDialog() {
         ServerIPDialog serverIPDialog = new ServerIPDialog();
-        serverIPDialog.SetHint(serverIP, serverPort, serverRTMP);
+        serverIPDialog.SetHint(serverIP, serverPort, "rtmp://serverIP:1935/live/clientID");
         serverIPDialog.show(getSupportFragmentManager(), "server ip dialog");
     }
 
@@ -288,76 +315,196 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         }, connectionRetry);
     }
 
+    private double getTakeoffElevationFromGoogleMaps(double latitude, double longitude) {
+        double result = Double.NaN;
+        try {
+            URL url = new URL("https://maps.googleapis.com/maps/api/elevation/json?locations=" + latitude + "%2C" + longitude + "&key=AIzaSyB3a5kGz56huz3xwPGRSzKKOSmEKDnmOvc");
+            HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.setRequestMethod("GET");
+            int responseCode = urlConnection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                BufferedReader in = new BufferedReader(new InputStreamReader(urlConnection.getInputStream()));
+                String inputLine;
+                StringBuffer response = new StringBuffer();
+
+                while ((inputLine = in.readLine()) != null) {
+                    response.append(inputLine);
+                }
+                in.close();
+
+                Log.i("GOOGLE_ELEVATION", response.toString());
+            }
+        } catch (MalformedURLException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+//
+//        OkHttpClient client = new OkHttpClient().newBuilder().build();
+//        MediaType mediaType = MediaType.parse("text/plain");
+//        RequestBody body = RequestBody.create("", mediaType);
+//        HttpGet
+//        Request request = new Request.Builder()
+//                .url("https://maps.googleapis.com/maps/api/elevation/json?locations=" + latitude + "%2C" + longitude + "&key=AIzaSyB3a5kGz56huz3xwPGRSzKKOSmEKDnmOvc")
+//                .method("GET", null)
+//                .build();
+//        try (Response response = client.newCall(request).execute()) {
+//            String jsonData = response.body().string();
+//            Log.i("GOOGLE_ELEVATION", jsonData);
+//            JSONObject elevationResponse = new JSONObject(jsonData);
+//            JSONArray elevationArray = elevationResponse.getJSONArray("results");
+//            try {
+//                JSONObject object = elevationArray.getJSONObject(0);
+//                result = object.getDouble("elevation");
+//                Log.i("GOOGLE_ELEVATION", String.valueOf(result));
+//            } catch (NullPointerException e) {
+//                e.printStackTrace();
+//            }
+//        } catch (JSONException e) {
+//            e.printStackTrace();
+//        } catch (IOException e) {
+//            e.printStackTrace();
+//        }
+
+        return result;
+    }
+
     private void sendFlightData() {
         Handler handler = new Handler();
         int delay = 100;
 
-        handler.postDelayed(new Runnable() {
+        Gimbal gimbal = aircraft.getGimbal();
+        gimbal.setStateCallback(new GimbalState.Callback() {
             @Override
-            public void run() {
-                boolean stop = false;
-                if(DJISDKManager.getInstance() != null) {
-                    if(DJISDKManager.getInstance().getProduct() != null) {
-                        Gimbal gimbal = DJISDKManager.getInstance().getProduct().getGimbal();
-                        gimbal.setStateCallback(new GimbalState.Callback() {
-                            @Override
-                            public void onUpdate(@NonNull GimbalState state) {
-                                gimbalState = state;
-                            }
-                        });
-                        stop = true;
-                    }
-                }
-                if (!stop) {
-                    handler.postDelayed(this, delay);
-                }
+            public void onUpdate(@NonNull GimbalState state) {
+                gimbalState = state;
             }
-        }, delay);
+        });
 
-        //DJISDKManager.getInstance().getFlightHubManager().getAircraftRealTimeFlightData();
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                //LocationCoordinate3D location = flightController.getState().getAircraftLocation();
-                //webSocketClient.send("DJI: altitude: " + location.getAltitude() + " | latitude: " + location.getLatitude() + " | longitude: " + location.getLongitude());
-                if(DJISDKManager.getInstance() != null) {
-                    if(DJISDKManager.getInstance().getProduct() != null) {
-                        Aircraft aircraft = (Aircraft) DJISDKManager.getInstance().getProduct();
-                        FlightControllerState state = aircraft.getFlightController().getState();
-                        LocationCoordinate3D location = state.getAircraftLocation();
-                        Attitude attitude = state.getAttitude();
-                        float compass = aircraft.getFlightController().getCompass().getHeading();
-                        float altitude = state.getTakeoffLocationAltitude() + location.getAltitude();
-                        dji.common.gimbal.Attitude gimbalAttitude = gimbalState.getAttitudeInDegrees();
-                        Date currentTime = Calendar.getInstance().getTime();
-                        SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+                FlightControllerState state = aircraft.getFlightController().getState();
+                LocationCoordinate3D location = state.getAircraftLocation();
+                Attitude attitude = state.getAttitude();
+                float compass = aircraft.getFlightController().getCompass().getHeading();
+                //float altitude = state.getTakeoffLocationAltitude() + location.getAltitude();
+                float altitude = 221.5f + location.getAltitude();
+                dji.common.gimbal.Attitude gimbalAttitude = gimbalState.getAttitudeInDegrees();
+                Date currentTime = Calendar.getInstance().getTime();
+                //SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
+                SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd' 'HH:mm:ss.SSS");
+                latestKnownLatitude = Double.isNaN(location.getLatitude()) ? latestKnownLatitude : location.getLatitude();
+                latestKnownLongitude = Double.isNaN(location.getLongitude()) ? latestKnownLongitude : location.getLongitude();
 
-                        if (webSocketClient.getReadyState() == WebSocket.READYSTATE.OPEN) {
-                            webSocketClient.send("{\"DroneId\":\"DJI-" + aircraft.getModel() + "\",\"Altitude\":" +
-                                    location.getAltitude() + ",\"Latitude\":"
-                                    + location.getLatitude() + ",\"Longitude\":" + location.getLongitude()
-                                    + ",\"Pitch\":" + attitude.pitch + ",\"Roll\":" + attitude.roll + ",\"Yaw\":" + attitude.yaw
-                                    + ",\"Compass\":" + compass
-                                    + ",\"VelocityX\":" + state.getVelocityX() + ",\"VelocityY\":" + state.getVelocityY() + ",\"VelocityZ\":" + state.getVelocityZ()
-                                    + ",\"GimbalPitch\":" + gimbalAttitude.getPitch() + ",\"GimbalRoll\":" + gimbalAttitude.getRoll() + ",\"GimbalYaw\":" + gimbalAttitude.getYaw()
-                                    + ",\"GimbalYawRelative\":" + gimbalState.getYawRelativeToAircraftHeading()
-                                    + ",\"TimeStamp\":" + timestampFormat.format(currentTime) + "}");
-                        }
+                if (webSocketClient.getReadyState() == WebSocket.READYSTATE.OPEN) {
+                    JSONObject msg = new JSONObject();
+                    JSONObject data = new JSONObject();
+                    JSONObject gps = new JSONObject();
+                    JSONObject aircraftOrientation = new JSONObject();
+                    JSONObject aircraftVelocity = new JSONObject();
+                    JSONObject gimbalOrientation = new JSONObject();
+                    try {
+                        msg.put("type", "data_broadcast");
+                        data.put("client_id", clientID);
+                        // Fill altitude
+                        data.put("altitude", altitude);
+                        // Fill GPS data
+                        gps.put("latitude", latestKnownLatitude);
+                        gps.put("longitude", latestKnownLongitude);
+                        data.put("gps", gps);
+                        // Fill aircraft orientation
+                        aircraftOrientation.put("pitch", attitude.pitch);
+                        aircraftOrientation.put("roll", attitude.roll);
+                        aircraftOrientation.put("yaw", attitude.yaw);
+                        aircraftOrientation.put("compass", compass);
+                        data.put("aircraft_orientation", aircraftOrientation);
+                        // Fill aircraft velocity
+                        aircraftVelocity.put("velocity_x", state.getVelocityX());
+                        aircraftVelocity.put("velocity_y", state.getVelocityY());
+                        aircraftVelocity.put("velocity_z", state.getVelocityZ());
+                        data.put("aircraft_velocity", aircraftVelocity);
+                        // Fill aircraft orientation
+                        gimbalOrientation.put("pitch", gimbalAttitude.getPitch());
+                        gimbalOrientation.put("roll", gimbalAttitude.getRoll());
+                        gimbalOrientation.put("yaw", gimbalAttitude.getYaw());
+                        gimbalOrientation.put("yaw_relative", gimbalState.getYawRelativeToAircraftHeading());
+                        data.put("gimbal_orientation", gimbalOrientation);
+                        // Fill timestamp
+                        data.put("timestamp", timestampFormat.format(currentTime));
+                        // Put everything together
+                        msg.put("data", data);
+
+                        webSocketClient.send(msg.toString());
+                    } catch (JSONException e) {
+                        e.printStackTrace();
                     }
-                }
-                if(webSocketClient.getReadyState() == WebSocket.READYSTATE.OPEN) {
+
                     handler.postDelayed(this, delay);
                 }
             }
         }, delay);
     }
 
+    private void doServerHandshake() {
+        JSONObject msg = new JSONObject();
+        JSONObject data = new JSONObject();
+        try {
+            msg.put("type", "hello");
+            data.put("ctype", 0);
+            data.put("drone_name", aircraft.getModel());
+            data.put("serial", aircraftSerialNumber);
+            msg.put("data", data);
+
+            webSocketClient.send(msg.toString());
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void handleServerHandshake(JSONObject msg) throws JSONException {
+        clientID = msg.getString("client_id");
+        rtmpURL = "rtmp://" + serverIP + ":1935/live/" + clientID;
+        startLiveShow();
+        Log.i(TAG, msg.toString());
+
+        // If app successfully connected to the server, start sending flight data
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                sendFlightData();
+            }
+        });
+    }
+
+    private void handleVehicleDetecion(JSONObject msg) throws JSONException {
+        Log.i("CAR_DETECTOR", msg.toString());
+        Paint paint = new Paint();
+        paint.setColor(Color.GREEN);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(10);
+
+        videoViewCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
+
+        float multiplierX = fpvView.getWidth() / 1280f;
+        float multiplierY = fpvView.getHeight() / 720f;
+
+        JSONArray rects = msg.getJSONArray("rects");
+        for (int i = 0; i < rects.length(); i++) {
+            JSONObject rect = rects.getJSONObject(i);
+            float leftX = rect.getInt("x");
+            float topY = rect.getInt("y");
+            float rightX = leftX + rect.getInt("w");
+            float bottomY = topY - rect.getInt("h");
+
+            videoViewCanvas.drawRect(multiplierX * leftX, multiplierY * topY + 250, multiplierX * rightX, multiplierY * bottomY + 250, paint);
+        }
+    }
+
     public void createWebSocketClient(String ip, String port) {
         URI uri;
         try {
-            //uri = new URI("ws://147.229.14.181:5555");
             uri = new URI("ws://" + ip + ":" + port);
-            //uri = new URI("ws://10.42.0.1:5555");
         } catch (URISyntaxException e) {
             e.printStackTrace();
             return;
@@ -368,18 +515,26 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             public void onOpen(ServerHandshake serverHandshake) {
                 Log.i(TAG, "Connected to the DroCo server.");
                 ToastUtils.setResultToToast("Connected to the DroCo server.");
-                // If app successfully connected to the server, start sending flight data
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        sendFlightData();
-                    }
-                });
+                // If websocket connection opened, do the custom server handshake
+                doServerHandshake();
             }
 
             @Override
             public void onMessage(String s) {
-
+                try {
+                    JSONObject receivedMsg = new JSONObject(s);
+                    String msgType = receivedMsg.getString("type");
+                    switch (msgType) {
+                        case "hello_resp":
+                            handleServerHandshake(receivedMsg.getJSONObject("data"));
+                            break;
+                        case "vehicle_detection_rects":
+                            handleVehicleDetecion(receivedMsg.getJSONObject("data"));
+                            break;
+                    }
+                } catch (JSONException e) {
+                    e.printStackTrace();
+                }
             }
 
             @Override
@@ -405,15 +560,76 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             case R.id.btn_stop_live_show:
                 stopLiveShow();
                 break;
-//            case R.id.btn_is_live_show_on:
-//                isLiveShowOn();
-//                break;
-//            case R.id.btn_show_info:
-//                showInfo();
-//                break;
             case R.id.btn_set_server_ip:
                 openServerIPDialog();
                 break;
+            case R.id.btn_start_recording:
+                startRecording(v);
+                break;
+            case R.id.btn_flight_data_recording:
+                startFlightDataRecording(v);
+                break;
+            case R.id.btn_start_car_detector:
+                startCarDetector(v);
+                break;
+        }
+    }
+
+    private void startCarDetector(View v) {
+        carDetector = !carDetector;
+        v.setSelected(carDetector);
+
+        // Init drawing canvas
+        Bitmap bitmap = Bitmap.createBitmap(fpvView.getWidth(), fpvView.getHeight(), Bitmap.Config.ARGB_8888);
+        videoViewCanvas = new Canvas(bitmap);
+        videoViewRectangles.setImageBitmap(bitmap);
+
+        Log.i("CAR_DETECTOR", "width: " + bitmap.getWidth() + " .. height: " + bitmap.getHeight());
+
+        JSONObject msg = new JSONObject();
+        JSONObject data = new JSONObject();
+        try {
+            msg.put("type", "vehicle_detection_set");
+            data.put("drone_stream_id", clientID);
+            data.put("state", carDetector);
+            msg.put("data", data);
+
+            webSocketClient.send(msg.toString());
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void startFlightDataRecording(View v) {
+        flightRecordingOn = !flightRecordingOn;
+        v.setSelected(flightRecordingOn);
+
+        JSONObject msg = new JSONObject();
+        try {
+            msg.put("type", "flight_data_save_set");
+            msg.put("data", flightRecordingOn);
+
+            webSocketClient.send(msg.toString());
+        } catch (JSONException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void startRecording(View v) {
+        recordingOn = !recordingOn;
+        v.setSelected(recordingOn);
+
+        JSONObject msg = new JSONObject();
+        JSONObject data = new JSONObject();
+        try {
+            msg.put("type", "media_record_set");
+            data.put("drone_stream_id", clientID);
+            data.put("state", recordingOn);
+            msg.put("data", data);
+
+            webSocketClient.send(msg.toString());
+        } catch (JSONException e) {
+            e.printStackTrace();
         }
     }
 
@@ -427,9 +643,49 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 
         serverIP = ip;
         serverPort = port;
-        serverRTMP = rtmp;
+        //serverRTMP = rtmp;
 
-        connectToServer(ip, port);
+        if(aircraftConnected) {
+            connectToServer(ip, port);
+        }
+    }
+
+    @Override
+    public void onAircraftStatusChanged(String aircraftStatus) {
+        switch (aircraftStatus) {
+            case DemoApplication.FLAG_AIRCRAFT_CONNECTED:
+                aircraftConnected = true;
+                aircraft = DemoApplication.getAircraftInstance();
+                aircraft.getFlightController().getSerialNumber(new CommonCallbacks.CompletionCallbackWith<String>() {
+                    @Override
+                    public void onSuccess(String s) {
+                        aircraftSerialNumber = s;
+                    }
+
+                    @Override
+                    public void onFailure(DJIError djiError) {
+                        aircraftSerialNumber = "";
+                    }
+                });
+                // Aircraft connected, connect to the server and start sending data.
+                if(!serverIP.isEmpty() && !serverPort.isEmpty()) {
+                    connectToServer(serverIP, serverPort);
+                }
+
+                Log.i("MainActivity", "aircraft connected");
+                break;
+            case DemoApplication.FLAG_AIRCRAFT_DISCONNECTED:
+                aircraftConnected = false;
+
+                Log.i("MainActivity", "aircraft disconnected");
+                break;
+            case DemoApplication.FLAG_PRODUCT_CHANGED:
+                Log.i("MainActivity", "product changed");
+                break;
+            case DemoApplication.FLAG_COMPONENT_CONNECTIVITY_CHANGED:
+                Log.i("MainActivity", "component connectivity changed");
+                break;
+        }
     }
 }
 

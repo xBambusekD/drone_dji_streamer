@@ -12,7 +12,14 @@
     <dji.ux.widget.FPVWidget
         android:id="@+id/video_view_fpv_video_feed"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"/>
+        android:layout_height="match_parent"
+        android:layout_centerHorizontal="true"/>
+
+    <ImageView
+        android:id="@+id/video_view_rectangles"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_centerHorizontal="true"/>
 
     <dji.ux.widget.FPVOverlayWidget
         android:layout_width="match_parent"
@@ -154,8 +161,8 @@
     <LinearLayout
         android:layout_width="40dp"
         android:layout_height="wrap_content"
-        android:layout_centerVertical="true"
         android:layout_marginStart="12dp"
+        android:layout_marginTop="48dp"
         android:orientation="vertical">
 
         <dji.ux.widget.TakeOffWidget
@@ -168,21 +175,21 @@
             android:layout_height="40dp"
             android:layout_marginTop="12dp"/>
 
-        <Button
-            android:id="@+id/btn_start_live_show"
-            style="@style/common_button"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_marginTop="24dp"
-            android:text="Live" />
+<!--        <Button-->
+<!--            android:id="@+id/btn_start_live_show"-->
+<!--            style="@style/common_button"-->
+<!--            android:layout_width="40dp"-->
+<!--            android:layout_height="40dp"-->
+<!--            android:layout_marginTop="24dp"-->
+<!--            android:text="Live" />-->
 
-        <Button
-            android:id="@+id/btn_stop_live_show"
-            style="@style/common_button"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_marginTop="24dp"
-            android:text="Stop" />
+<!--        <Button-->
+<!--            android:id="@+id/btn_stop_live_show"-->
+<!--            style="@style/common_button"-->
+<!--            android:layout_width="40dp"-->
+<!--            android:layout_height="40dp"-->
+<!--            android:layout_marginTop="24dp"-->
+<!--            android:text="Stop" />-->
 
 <!--        <Button-->
 <!--            android:id="@+id/btn_is_live_show_on"-->
@@ -210,6 +217,54 @@
 
     </LinearLayout>
 
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:layout_alignParentRight="true"
+        android:orientation="horizontal"
+        android:padding="12dp">
+
+        <Button
+            android:id="@+id/btn_start_live_show"
+            style="@style/common_button"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginRight="12dp"
+            android:text="Live" />
+
+        <Button
+            android:id="@+id/btn_stop_live_show"
+            style="@style/common_button"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginRight="12dp"
+            android:text="Stop" />
+
+        <Button
+            android:id="@+id/btn_start_car_detector"
+            style="@style/record_button"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginRight="12dp"
+            android:text="Car" />
+
+        <Button
+            android:id="@+id/btn_flight_data_recording"
+            style="@style/record_button"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginRight="12dp"
+            android:text="Fr" />
+
+        <Button
+            android:id="@+id/btn_start_recording"
+            style="@style/record_button"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_marginRight="12dp"
+            android:text="R" />
+    </LinearLayout>
 
     <dji.ux.widget.controls.CameraControlsWidget
         android:id="@+id/CameraCapturePanel"
