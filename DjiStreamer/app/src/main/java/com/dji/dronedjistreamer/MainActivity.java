@@ -27,6 +27,7 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 
+import com.dji.dronedjistreamer.internal.utils.AltitudeDialog;
 import com.dji.dronedjistreamer.internal.utils.ServerIPDialog;
 import com.dji.dronedjistreamer.internal.utils.ToastUtils;
 
@@ -57,6 +58,8 @@ import dji.sdk.gimbal.Gimbal;
 import dji.sdk.products.Aircraft;
 import dji.sdk.sdkmanager.DJISDKManager;
 import dji.sdk.sdkmanager.LiveStreamManager;
+import dji.sdk.sdkmanager.LiveVideoBitRateMode;
+import dji.sdk.sdkmanager.LiveVideoResolution;
 import dji.thirdparty.org.java_websocket.WebSocket;
 import dji.thirdparty.org.java_websocket.client.WebSocketClient;
 import dji.thirdparty.org.java_websocket.handshake.ServerHandshake;
@@ -70,7 +73,7 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
-public class MainActivity extends AppCompatActivity implements View.OnClickListener, ServerIPDialog.ServerIPDialogListener, AircraftStatusReceiver.AircraftStatusListener {
+public class MainActivity extends AppCompatActivity implements View.OnClickListener, ServerIPDialog.ServerIPDialogListener, AircraftStatusReceiver.AircraftStatusListener, AltitudeDialog.AltitudeDialogListener {
 
     private static final String TAG = MainActivity.class.getName();
 
@@ -82,6 +85,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
 //    private Button isLiveShowOnBtn;
 //    private Button showInfoBtn;
     private Button setServerIPBtn;
+    private Button setAltitudeBtn;
     private Button startRecordingBtn;
     private Button startFlightRecordingBtn;
     private Button startCarDetectorBtn;
@@ -114,9 +118,9 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private boolean flightRecordingOn = false;
     private boolean carDetector = false;
 
-    private double takeoffAltitude = Double.NaN;
-    private double latestKnownLatitude = 49.22727;
-    private double latestKnownLongitude = 16.59721;
+    private float takeoffAltitude = Float.NaN;
+    private double latestKnownLatitude = 49.22668;
+    private double latestKnownLongitude = 16.59768;
 
 
     @Override
@@ -146,6 +150,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         serverIP = sharedPreferences.getString("serverIP", "");
         serverPort = sharedPreferences.getString("serverPort", "");
 
+        takeoffAltitude = Float.parseFloat(sharedPreferences.getString("altitude", "0f"));
+
         connectionHandler = new Handler();
 
         IntentFilter filter = new IntentFilter();
@@ -160,6 +166,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         startLiveShowBtn = (Button) findViewById(R.id.btn_start_live_show);
         stopLiveShowBtn = (Button) findViewById(R.id.btn_stop_live_show);
         setServerIPBtn = (Button) findViewById(R.id.btn_set_server_ip);
+        setAltitudeBtn = (Button) findViewById(R.id.btn_set_altitude);
         startRecordingBtn = (Button) findViewById(R.id.btn_start_recording);
         startFlightRecordingBtn = (Button) findViewById(R.id.btn_flight_data_recording);
         startCarDetectorBtn = (Button) findViewById(R.id.btn_start_car_detector);
@@ -167,6 +174,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         startLiveShowBtn.setOnClickListener(this);
         stopLiveShowBtn.setOnClickListener(this);
         setServerIPBtn.setOnClickListener(this);
+        setAltitudeBtn.setOnClickListener(this);
         startRecordingBtn.setOnClickListener(this);
         startFlightRecordingBtn.setOnClickListener(this);
         startCarDetectorBtn.setOnClickListener(this);
@@ -194,7 +202,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
 
-        if(isLiveStreamManagerOn()) {
+        if(isLiveStreamManagerOn(false)) {
             DJISDKManager.getInstance().getLiveStreamManager().registerListener(listener);
         }
     }
@@ -202,7 +210,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     @Override
     public void onDetachedFromWindow() {
         super.onDetachedFromWindow();
-        if(isLiveStreamManagerOn()) {
+        if(isLiveStreamManagerOn(false)) {
             DJISDKManager.getInstance().getLiveStreamManager().unregisterListener(listener);
         }
     }
@@ -210,11 +218,11 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     private void startLiveShow() {
         //Toast.makeText(getApplicationContext(), "Start Live Show", Toast.LENGTH_LONG).show();
 
-        if (!isLiveStreamManagerOn()) {
+        if (!isLiveStreamManagerOn(false)) {
             return;
         }
 
-        if(isLiveStreamManagerOn()) {
+        if(isLiveStreamManagerOn(false)) {
             DJISDKManager.getInstance().getLiveStreamManager().registerListener(listener);
         }
 
@@ -228,7 +236,11 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         new Thread() {
             @Override
             public void run() {
+                ToastUtils.setResultToToast("Starting live stream.");
                 DJISDKManager.getInstance().getLiveStreamManager().setLiveUrl(rtmpURL);
+//                DJISDKManager.getInstance().getLiveStreamManager().setLiveVideoBitRateMode(LiveVideoBitRateMode.MANUAL);
+//                DJISDKManager.getInstance().getLiveStreamManager().setLiveVideoResolution(LiveVideoResolution.VIDEO_RESOLUTION_1920_1080);
+//                DJISDKManager.getInstance().getLiveStreamManager().setLiveVideoBitRate(4096);
                 int result = DJISDKManager.getInstance().getLiveStreamManager().startStream();
                 DJISDKManager.getInstance().getLiveStreamManager().setStartTime();
 
@@ -240,7 +252,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
     private void stopLiveShow() {
-        if (!isLiveStreamManagerOn()) {
+        if (!isLiveStreamManagerOn(false)) {
             return;
         }
         DJISDKManager.getInstance().getLiveStreamManager().stopStream();
@@ -248,31 +260,45 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
     private void isLiveShowOn() {
-        if (!isLiveStreamManagerOn()) {
+        if (!isLiveStreamManagerOn(true)) {
             return;
         }
         ToastUtils.setResultToToast("Is Live Show On:" + DJISDKManager.getInstance().getLiveStreamManager().isStreaming());
     }
 
     private void showInfo() {
-        if (!isLiveStreamManagerOn()) {
+        if (!isLiveStreamManagerOn(true)) {
             return;
         }
+
+        Log.i("STREAM_SIZE_INFO", String.valueOf(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoResolution().getWidth() + "x" + DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoResolution().getHeight()));
         StringBuilder sb = new StringBuilder();
-        sb.append("Video BitRate:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoBitRate()).append(" kpbs\n");
-        sb.append("Audio BitRate:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveAudioBitRate()).append(" kpbs\n");
-        sb.append("Video FPS:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoFps()).append("\n");
+        sb.append("Video BitRate:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoBitRate()).append(" kpbs");
+        ToastUtils.setResultToToast(sb.toString());
+        sb.delete(0, sb.length());
+        sb.append("Audio BitRate:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveAudioBitRate()).append(" kpbs");
+        ToastUtils.setResultToToast(sb.toString());
+        sb.delete(0, sb.length());
+        sb.append("Video FPS:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoFps());
+        ToastUtils.setResultToToast(sb.toString());
+        sb.delete(0, sb.length());
+        sb.append("Video Resolution:").append(String.valueOf(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoResolution().getWidth())).append("x").append(String.valueOf(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoResolution().getHeight()));
+        ToastUtils.setResultToToast(sb.toString());
+        sb.delete(0, sb.length());
         sb.append("Video Cache size:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoCacheSize()).append(" frame");
         ToastUtils.setResultToToast(sb.toString());
+        sb.delete(0, sb.length());
     }
 
-    private boolean isLiveStreamManagerOn() {
+    private boolean isLiveStreamManagerOn(boolean displayMessage) {
         if (DJISDKManager.getInstance().getLiveStreamManager() == null) {
-            ToastUtils.setResultToToast("No live stream manager!");
+            if(displayMessage)
+                ToastUtils.setResultToToast("No live stream manager!");
             return false;
         }
         else {
-            ToastUtils.setResultToToast("Live stream manager is ON!");
+            if(displayMessage)
+                ToastUtils.setResultToToast("Live stream manager is ON!");
         }
         return true;
     }
@@ -281,6 +307,12 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         ServerIPDialog serverIPDialog = new ServerIPDialog();
         serverIPDialog.SetHint(serverIP, serverPort, "rtmp://serverIP:1935/live/clientID");
         serverIPDialog.show(getSupportFragmentManager(), "server ip dialog");
+    }
+
+    private void openAltitudeDialog() {
+        AltitudeDialog altitudeDialog = new AltitudeDialog();
+        altitudeDialog.SetHint(String.valueOf(takeoffAltitude));
+        altitudeDialog.show(getSupportFragmentManager(), "altitude dialog");
     }
 
     private void connectToServer(String ip, String port) {
@@ -389,7 +421,9 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 Attitude attitude = state.getAttitude();
                 float compass = aircraft.getFlightController().getCompass().getHeading();
                 //float altitude = state.getTakeoffLocationAltitude() + location.getAltitude();
-                float altitude = 221.5f + location.getAltitude();
+                //float altitude = 221.5f + location.getAltitude();
+                float altitude = takeoffAltitude + location.getAltitude();
+                //float altitude = 343.3f + location.getAltitude();
                 dji.common.gimbal.Attitude gimbalAttitude = gimbalState.getAttitudeInDegrees();
                 Date currentTime = Calendar.getInstance().getTime();
                 //SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
@@ -559,9 +593,13 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 break;
             case R.id.btn_stop_live_show:
                 stopLiveShow();
+                //showInfo();
                 break;
             case R.id.btn_set_server_ip:
                 openServerIPDialog();
+                break;
+            case R.id.btn_set_altitude:
+                openAltitudeDialog();
                 break;
             case R.id.btn_start_recording:
                 startRecording(v);
@@ -651,6 +689,15 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     }
 
     @Override
+    public void applyInputs(String altitude) {
+        SharedPreferences.Editor editor = sharedPreferences.edit();
+        editor.putString("altitude", altitude);
+        editor.commit();
+
+        takeoffAltitude = Float.parseFloat(altitude);
+    }
+
+    @Override
     public void onAircraftStatusChanged(String aircraftStatus) {
         switch (aircraftStatus) {
             case DemoApplication.FLAG_AIRCRAFT_CONNECTED:
@@ -687,5 +734,6 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
                 break;
         }
     }
+
 }
 

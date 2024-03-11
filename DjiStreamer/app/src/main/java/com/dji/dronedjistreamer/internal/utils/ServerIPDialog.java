@@ -31,7 +31,7 @@ public class ServerIPDialog extends AppCompatDialogFragment {
         View view = inflater.inflate(R.layout.server_ip_dialog, null);
 
         builder.setView(view)
-                .setTitle("Server IP and Port")
+                .setTitle("Connection to the Server")
                 .setNegativeButton("cancel", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
