@@ -9,17 +9,38 @@
     tools:context=".MainActivity">
 
     <!-- Widget to see first person view (FPV) -->
-    <dji.ux.widget.FPVWidget
-        android:id="@+id/video_view_fpv_video_feed"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_centerHorizontal="true"/>
+<!--    <dji.ux.widget.FPVWidget-->
+<!--        android:id="@+id/video_view_fpv_video_feed"-->
+<!--        android:layout_width="match_parent"-->
+<!--        android:layout_height="match_parent"-->
+<!--        android:layout_centerHorizontal="true"/>-->
 
     <ImageView
         android:id="@+id/video_view_rectangles"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:layout_centerHorizontal="true"/>
+
+<!--    <ImageView-->
+<!--        android:id="@+id/fpv_jpeg_video_feed"-->
+<!--        android:layout_width="match_parent"-->
+<!--        android:layout_height="match_parent"-->
+<!--        android:layout_centerHorizontal="true"-->
+<!--        android:visibility="gone"/>-->
+
+    <TextureView
+        android:id="@+id/fpv_jpeg_video_feed_texture"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_centerHorizontal="true"
+        android:visibility="visible"/>
+
+<!--    <SurfaceView-->
+<!--        android:id="@+id/fpv_jpeg_video_feed_surface"-->
+<!--        android:layout_width="match_parent"-->
+<!--        android:layout_height="match_parent"-->
+<!--        android:layout_centerHorizontal="true"-->
+<!--        android:visibility="visible"/>-->
 
     <dji.ux.widget.FPVOverlayWidget
         android:layout_width="match_parent"
