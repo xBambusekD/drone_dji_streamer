@@ -1,7 +1,6 @@
 package com.dji.dronedjistreamer;
 
 import android.Manifest;
-import android.app.Activity;
 import android.content.Context;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
@@ -15,28 +14,19 @@ import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.graphics.YuvImage;
-import android.media.Image;
-import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
-import android.nfc.Tag;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Debug;
-import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.ImageView;
-import android.widget.TextView;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
-import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.FragmentActivity;
 
@@ -44,27 +34,19 @@ import com.dji.dronedjistreamer.internal.utils.AltitudeDialog;
 import com.dji.dronedjistreamer.internal.utils.ServerIPDialog;
 import com.dji.dronedjistreamer.internal.utils.ToastUtils;
 
-import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
+import java.time.Duration;
 import java.util.Calendar;
 import java.util.Date;
 
@@ -80,21 +62,15 @@ import dji.sdk.gimbal.Gimbal;
 import dji.sdk.products.Aircraft;
 import dji.sdk.sdkmanager.DJISDKManager;
 import dji.sdk.sdkmanager.LiveStreamManager;
-import dji.sdk.sdkmanager.LiveVideoBitRateMode;
-import dji.sdk.sdkmanager.LiveVideoResolution;
-import dji.thirdparty.afinal.core.AsyncTask;
-import dji.thirdparty.org.java_websocket.WebSocket;
-import dji.thirdparty.org.java_websocket.client.WebSocketClient;
-import dji.thirdparty.org.java_websocket.handshake.ServerHandshake;
 import dji.common.flightcontroller.LocationCoordinate3D;
-import dji.thirdparty.sanselan.util.IOUtils;
-import dji.ux.widget.FPVWidget;
-import okhttp3.HttpUrl;
-import okhttp3.MediaType;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
+
+import reactor.core.Disposable;
+import reactor.core.publisher.Mono;
+import reactor.netty.http.client.HttpClient;
+import reactor.netty.http.websocket.WebsocketInbound;
+import reactor.netty.http.websocket.WebsocketOutbound;
+import reactor.util.retry.Retry;
+
 import java.util.Base64;
 
 public class MainActivity extends FragmentActivity
@@ -104,14 +80,26 @@ public class MainActivity extends FragmentActivity
         AltitudeDialog.AltitudeDialogListener,
         DJICodecManager.YuvDataCallback {
 
+    public static enum READYSTATE {
+        NOT_YET_CONNECTED,
+        CONNECTING,
+        OPEN,
+        CLOSING,
+        CLOSED,
+        FAILURE
+    }
+
     private boolean RunRTMPStream = false;
 
     private static final String TAG = MainActivity.class.getName();
     private static final int FLIGHT_INTERVAL = 4;
 
-    private static final String liveShowUrl = "rtmp://147.229.14.181:1935/live/dji_mavic";
     private LiveStreamManager.OnLiveChangeListener listener;
-    public static WebSocketClient webSocketClient;
+
+    private WebsocketOutbound outboundClient;
+    private Disposable connection;
+    private READYSTATE connectionState = READYSTATE.CLOSED;
+
     private Button startLiveShowBtn;
     private Button stopLiveShowBtn;
 //    private Button isLiveShowOnBtn;
@@ -122,24 +110,18 @@ public class MainActivity extends FragmentActivity
     private Button startFlightRecordingBtn;
     private Button startCarDetectorBtn;
     private ImageView videoViewRectangles;
-    private Canvas videoViewCanvas;
-    //private FPVWidget fpvView;
-    //private ImageView fpvJpegView;
-    private TextureView fpvJpegTextureView;
-    //private SurfaceView fpvJpegSurfaceView;
-    //private SurfaceHolder fpvJpegSurfaceHolder;
-//    private SurfaceHolder.Callback surfaceCallback;
 
+    private Canvas videoViewCanvas;
+    private TextureView fpvJpegTextureView;
     private SharedPreferences sharedPreferences;
 
     private String serverIP = "";
     private String serverPort = "";
-    //private String serverRTMP = "";
 
     private GimbalState gimbalState;
 
     private Handler connectionHandler;
-    private final int connectionRetry = 1000;
+    private final int connectionRetry = 5;
 
     private Aircraft aircraft;
     private String aircraftSerialNumber;
@@ -160,8 +142,6 @@ public class MainActivity extends FragmentActivity
 //    private double latestKnownLongitude = 16.603196;
     private double latestKnownLatitude = 49.227240;
     private double latestKnownLongitude = 16.597338;
-
-    private int yuvFrameCount;
 
     private DJICodecManager codecManager = null;
     private String latestJPEGframe = "";
@@ -227,10 +207,7 @@ public class MainActivity extends FragmentActivity
         startCarDetectorBtn.setOnClickListener(this);
 
         videoViewRectangles = (ImageView) findViewById(R.id.video_view_rectangles);
-        //fpvView = (FPVWidget) findViewById(R.id.video_view_fpv_video_feed);
-        //fpvJpegView = (ImageView) findViewById(R.id.fpv_jpeg_video_feed);
         fpvJpegTextureView = (TextureView) findViewById(R.id.fpv_jpeg_video_feed_texture);
-        //fpvJpegSurfaceView = (SurfaceView) findViewById(R.id.fpv_jpeg_video_feed_surface);
 
         listener = new LiveStreamManager.OnLiveChangeListener() {
             @Override
@@ -243,37 +220,33 @@ public class MainActivity extends FragmentActivity
     @Override
     protected void onResume() {
         super.onResume();
-        //initPreviewerSurfaceView();
-        //initPreviewerTextureView();
     }
 
-//    private void initPreviewerSurfaceView() {
-//        Log.d(TAG, "initSurfaceView");
-//        fpvJpegSurfaceHolder = fpvJpegSurfaceView.getHolder();
-//        SurfaceHolder.Callback surfaceCallback = new SurfaceHolder.Callback() {
-//            @Override
-//            public void surfaceCreated(@NonNull SurfaceHolder surfaceHolder) {
-//                Log.d(TAG, "real onSurfaceTextureAvailable: width " + fpvJpegSurfaceView.getWidth() + " height " + fpvJpegSurfaceView.getHeight());
-//                codecManager = new DJICodecManager(getApplicationContext(), surfaceHolder, fpvJpegSurfaceView.getWidth(), fpvJpegSurfaceView.getHeight());
-//            }
-//
-//            @Override
-//            public void surfaceChanged(@NonNull SurfaceHolder surfaceHolder, int i, int i1, int i2) {
-//
-//            }
-//
-//            @Override
-//            public void surfaceDestroyed(@NonNull SurfaceHolder surfaceHolder) {
-//                if(codecManager != null) {
-//                    codecManager.cleanSurface();
-//                    codecManager.destroyCodec();
-//                    codecManager = null;
-//                }
-//            }
-//        };
-//
-//        fpvJpegSurfaceHolder.addCallback(surfaceCallback);
-//    }
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        closeConnection();
+    }
+
+    private void closeConnection() {
+        if(outboundClient != null) {
+            outboundClient.sendClose() // Initiate a close handshake
+                    .then()
+                    .doOnSuccess(unused -> {
+                        Log.d(TAG, "WebSocket close frame sent.");
+                        // Clean up after successful close
+                        outboundClient = null; // Clear the outbound client reference
+                        connectionState = READYSTATE.CLOSED;
+                    })
+                    .doOnError(error -> Log.e(TAG, "Failed to send close frame", error))
+                    .subscribe();
+        }
+
+        if(connection != null) {
+            connection.dispose();
+            connection = null;
+        }
+    }
 
     private void initPreviewerTextureView() {
         Log.d(TAG, "FPV: initPreviewerTextureView");
@@ -336,14 +309,6 @@ public class MainActivity extends FragmentActivity
         }
     }
 
-    public void AircraftConnected() {
-
-    }
-
-    public void AircraftDisconnected() {
-
-    }
-
     @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
@@ -370,71 +335,18 @@ public class MainActivity extends FragmentActivity
     }
 
     private void createCodecManager() {
-//        if(codecManager != null) {
-//            codecManager.cleanSurface();
-//            codecManager.destroyCodec();
-//            codecManager = null;
-//        }
 
-//        fpvJpegSurfaceHolder = fpvJpegSurfaceView.getHolder();
-//        Log.d(TAG, "creating surfaceHolder");
-//        fpvJpegSurfaceHolder.addCallback(new SurfaceHolder.Callback() {
-//            @Override
-//            public void surfaceCreated(@NonNull SurfaceHolder surfaceHolder) {
-//                Log.d(TAG, "real onSurfaceTextureAvailable");
-//                codecManager = new DJICodecManager(getApplicationContext(), surfaceHolder, 1280, 720, UsbAccessoryService.VideoStreamSource.Camera);
-//                codecManager.enabledYuvData(true);
-//                codecManager.setYuvDataCallback(MainActivity.this);
-//            }
-//
-//            @Override
-//            public void surfaceChanged(@NonNull SurfaceHolder surfaceHolder, int i, int i1, int i2) {
-//
-//            }
-//
-//            @Override
-//            public void surfaceDestroyed(@NonNull SurfaceHolder surfaceHolder) {
-//                if(codecManager != null) {
-//                    codecManager.cleanSurface();
-//                    codecManager.destroyCodec();
-//                    codecManager = null;
-//                }
-//
-//                latestJPEGframe = "";
-//            }
-//        });
-
-
-
-//        codecManager = new DJICodecManager(getApplicationContext(), null, 1280, 720, UsbAccessoryService.VideoStreamSource.Camera);
-////        codecManager = new DJICodecManager(getApplicationContext(), null, fpvJpegView.getWidth(), fpvJpegView.getHeight());
-//
         if(codecManager != null) {
             codecManager.enabledYuvData(true);
             codecManager.setYuvDataCallback(this);
-            //fpvJpegTextureView.setVisibility(View.GONE);
-            //fpvJpegView.setVisibility(View.VISIBLE);
         }
-
-//        // The callback for receiving the raw H264 video data for camera live view
-//        mReceivedVideoDataListener = new VideoFeeder.VideoDataListener() {
-//
-//            @Override
-//            public void onReceive(byte[] videoBuffer, int size) {
-//                if (codecManager != null) {
-//                    codecManager.sendDataToDecoder(videoBuffer, size);
-//                }
-//            }
-//        };
     }
 
     private void runSyncedJPEGStream() {
         createCodecManager();
-        //fpvView.setVisibility(View.GONE);
     }
 
     private void runRTMPStream() {
-        //Toast.makeText(getApplicationContext(), "Start Live Show", Toast.LENGTH_LONG).show();
 
         if (!isLiveStreamManagerOn(false)) {
             return;
@@ -443,8 +355,6 @@ public class MainActivity extends FragmentActivity
         if(isLiveStreamManagerOn(false)) {
             DJISDKManager.getInstance().getLiveStreamManager().registerListener(listener);
         }
-
-        //LiveStreamManager liveStreamManager = DJISDKManager.getInstance().getLiveStreamManager();
 
         ToastUtils.setResultToToast("Checking if streaming is on");
         if (DJISDKManager.getInstance().getLiveStreamManager().isStreaming()) {
@@ -495,36 +405,6 @@ public class MainActivity extends FragmentActivity
         ToastUtils.setResultToToast("Stop Live Show");
     }
 
-    private void isLiveShowOn() {
-        if (!isLiveStreamManagerOn(true)) {
-            return;
-        }
-        ToastUtils.setResultToToast("Is Live Show On:" + DJISDKManager.getInstance().getLiveStreamManager().isStreaming());
-    }
-
-    private void showInfo() {
-        if (!isLiveStreamManagerOn(true)) {
-            return;
-        }
-
-        Log.i("STREAM_SIZE_INFO", String.valueOf(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoResolution().getWidth() + "x" + DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoResolution().getHeight()));
-        StringBuilder sb = new StringBuilder();
-        sb.append("Video BitRate:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoBitRate()).append(" kpbs");
-        ToastUtils.setResultToToast(sb.toString());
-        sb.delete(0, sb.length());
-        sb.append("Audio BitRate:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveAudioBitRate()).append(" kpbs");
-        ToastUtils.setResultToToast(sb.toString());
-        sb.delete(0, sb.length());
-        sb.append("Video FPS:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoFps());
-        ToastUtils.setResultToToast(sb.toString());
-        sb.delete(0, sb.length());
-        sb.append("Video Resolution:").append(String.valueOf(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoResolution().getWidth())).append("x").append(String.valueOf(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoResolution().getHeight()));
-        ToastUtils.setResultToToast(sb.toString());
-        sb.delete(0, sb.length());
-        sb.append("Video Cache size:").append(DJISDKManager.getInstance().getLiveStreamManager().getLiveVideoCacheSize()).append(" frame");
-        ToastUtils.setResultToToast(sb.toString());
-        sb.delete(0, sb.length());
-    }
 
     private boolean isLiveStreamManagerOn(boolean displayMessage) {
         if (DJISDKManager.getInstance().getLiveStreamManager() == null) {
@@ -551,36 +431,56 @@ public class MainActivity extends FragmentActivity
         altitudeDialog.show(getSupportFragmentManager(), "altitude dialog");
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.O)
     private void connectToServer(String ip, String port) {
-        if(webSocketClient != null) {
-            if(webSocketClient.getReadyState() == WebSocket.READYSTATE.OPEN) {
-                webSocketClient.close();
-            }
-        }
+        connection = HttpClient.create()
+                .websocket()
+                .uri("ws://" + ip + ":" + port + "/")
+                .handle((inbound, outbound) -> {
+                    this.outboundClient = outbound; // Save outbound for later use
+                    return doServerHandshake(inbound, outbound)
+                            .then(handleWebSocket(inbound, outbound));
+                })
+                .doOnSubscribe(subscription -> {
+                    Log.d(TAG, "Connected to WebSocket server");
+                })
+                .doOnTerminate(() -> {
+                    Log.d(TAG, "Disconnected from WebSocket server");
+                    connectionState = READYSTATE.CLOSED;
+                })
+                .doOnError(error -> {
+                    Log.e(TAG, "WebSocket connection failed", error);
+                    connectionState = READYSTATE.FAILURE;
+                })
+                .retryWhen(Retry.fixedDelay(Long.MAX_VALUE, Duration.ofSeconds(connectionRetry))
+                        .doBeforeRetry(retrySignal -> Log.d(TAG, "Retrying connection...")))
+                .subscribe();
+    }
 
-        // Stop all previous connection attempts
-        connectionHandler.removeCallbacksAndMessages(null);
-
-        // Create new websocket client
-        createWebSocketClient(ip, port);
-
-        connectionHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                Log.d("WEBSOCKET_STATE", webSocketClient.getReadyState().toString());
-
-                // If the websocket is not connected, repeat the connection process
-                if(webSocketClient.getReadyState() != WebSocket.READYSTATE.OPEN) {
-                    if(webSocketClient.getReadyState() == WebSocket.READYSTATE.CLOSED) {
-                        // Recreate websocket client
-                        createWebSocketClient(ip, port);
+    private Mono<Void> handleWebSocket(WebsocketInbound inbound, WebsocketOutbound outbound) {
+        // Log incoming messages
+        inbound.receive()
+                .asString()
+                .doOnNext(message -> {
+                    Log.d(TAG, "Received message: " + message);
+                    try {
+                        JSONObject receivedMsg = new JSONObject(message);
+                        String msgType = receivedMsg.getString("type");
+                        switch (msgType) {
+                            case "hello_resp":
+                                handleServerHandshake(receivedMsg.getJSONObject("data"));
+                                break;
+                            case "vehicle_detection_rects":
+                                handleVehicleDetecion(receivedMsg.getJSONObject("data"));
+                                break;
+                        }
+                    } catch (JSONException e) {
+                        Log.e(TAG, "On message received", e);
                     }
-                    webSocketClient.connect();
+                })
+                .subscribe();
 
-                    connectionHandler.postDelayed(this, connectionRetry);
-                }
-            }
-        }, connectionRetry);
+        return Mono.never();
     }
 
     private double getTakeoffElevationFromGoogleMaps(double latitude, double longitude) {
@@ -637,101 +537,11 @@ public class MainActivity extends FragmentActivity
         return result;
     }
 
-    private void sendFlightData() {
-//        Handler handler = new Handler();
-//        int delay = 100;
 
-        Gimbal gimbal = aircraft.getGimbal();
-        gimbal.setStateCallback(new GimbalState.Callback() {
-            @Override
-            public void onUpdate(@NonNull GimbalState state) {
-                gimbalState = state;
-            }
-        });
-
-//        handler.postDelayed(new Runnable() {
-//            @Override
-//            public void run() {
-//                try {
-//                    Log.d(TAG, "WSRS: " + String.valueOf(webSocketClient.getReadyState()));
-//                    FlightControllerState state = aircraft.getFlightController().getState();
-//                    LocationCoordinate3D location = state.getAircraftLocation();
-//                    Attitude attitude = state.getAttitude();
-//                    float compass = aircraft.getFlightController().getCompass().getHeading();
-//                    //float altitude = state.getTakeoffLocationAltitude() + location.getAltitude();
-//                    //float altitude = 221.5f + location.getAltitude();
-//                    float altitude = takeoffAltitude + location.getAltitude();
-//                    //float altitude = 343.3f + location.getAltitude();
-//                    dji.common.gimbal.Attitude gimbalAttitude = gimbalState.getAttitudeInDegrees();
-//                    Date currentTime = Calendar.getInstance().getTime();
-//                    //SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
-//                    SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd' 'HH:mm:ss.SSS");
-//                    latestKnownLatitude = Double.isNaN(location.getLatitude()) ? latestKnownLatitude : location.getLatitude();
-//                    latestKnownLongitude = Double.isNaN(location.getLongitude()) ? latestKnownLongitude : location.getLongitude();
-//
-//                    if (webSocketClient.getReadyState() == WebSocket.READYSTATE.OPEN) {
-//                        JSONObject msg = new JSONObject();
-//                        JSONObject data = new JSONObject();
-//                        JSONObject gps = new JSONObject();
-//                        JSONObject aircraftOrientation = new JSONObject();
-//                        JSONObject aircraftVelocity = new JSONObject();
-//                        JSONObject gimbalOrientation = new JSONObject();
-//                        try {
-//                            msg.put("type", "data_broadcast");
-//                            data.put("client_id", clientID);
-//                            // Fill altitude
-//                            data.put("altitude", altitude);
-//                            // Fill GPS data
-//                            gps.put("latitude", latestKnownLatitude);
-//                            gps.put("longitude", latestKnownLongitude);
-//                            data.put("gps", gps);
-//                            // Fill aircraft orientation
-//                            aircraftOrientation.put("pitch", attitude.pitch);
-//                            aircraftOrientation.put("roll", attitude.roll);
-//                            aircraftOrientation.put("yaw", attitude.yaw);
-//                            aircraftOrientation.put("compass", compass);
-//                            data.put("aircraft_orientation", aircraftOrientation);
-//                            // Fill aircraft velocity
-//                            aircraftVelocity.put("velocity_x", state.getVelocityX());
-//                            aircraftVelocity.put("velocity_y", state.getVelocityY());
-//                            aircraftVelocity.put("velocity_z", state.getVelocityZ());
-//                            data.put("aircraft_velocity", aircraftVelocity);
-//                            // Fill aircraft orientation
-//                            gimbalOrientation.put("pitch", gimbalAttitude.getPitch());
-//                            gimbalOrientation.put("roll", gimbalAttitude.getRoll());
-//                            gimbalOrientation.put("yaw", gimbalAttitude.getYaw());
-//                            gimbalOrientation.put("yaw_relative", gimbalState.getYawRelativeToAircraftHeading());
-//                            data.put("gimbal_orientation", gimbalOrientation);
-//
-//                            // Fill timestamp
-//                            data.put("timestamp", timestampFormat.format(currentTime));
-//
-//                            // Fill jpeg frame
-//                            data.put("frame", latestJPEGframe);
-//
-//                            // Put everything together
-//                            msg.put("data", data);
-//
-//                            //Log.i(TAG, "Sending flight data");
-//                            Log.i(TAG, msg.toString());
-//
-//                            webSocketClient.send(msg.toString());
-//                        } catch (Exception e) {
-//                            Log.e(TAG, "Sending flight data", e);
-//                        }
-//
-//                        handler.postDelayed(this, delay);
-//                    }
-//                } catch (Exception e) {
-//                    Log.e(TAG, "Flight Data send exception", e);
-//                }
-//            }
-//        }, delay);
-    }
-
-    private void doServerHandshake() {
+    private Mono<Void> doServerHandshake(WebsocketInbound inbound, WebsocketOutbound outbound) {
         JSONObject msg = new JSONObject();
         JSONObject data = new JSONObject();
+        Log.d(TAG, "Trying to handshake");
         try {
             msg.put("type", "hello");
             data.put("ctype", 0);
@@ -739,9 +549,16 @@ public class MainActivity extends FragmentActivity
             data.put("serial", aircraftSerialNumber);
             msg.put("data", data);
 
-            webSocketClient.send(msg.toString());
+
+            //webSocketClient.send(msg.toString());
+            return outbound.sendString(Mono.just(msg.toString()))
+                    .then()
+                    .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
+                    .doOnError(error -> Log.e(TAG, "Failed to send message", error));
+
         } catch (JSONException e) {
             Log.e(TAG, "Doing server handshake", e);
+            return Mono.error(e);
         }
     }
 
@@ -750,18 +567,15 @@ public class MainActivity extends FragmentActivity
         rtmpURL = "rtmp://" + serverIP + ":1935/live/" + clientID;
         //startLiveShow();
         Log.i(TAG, msg.toString());
+        connectionState = READYSTATE.OPEN;
+    }
 
-        // If app successfully connected to the server, start sending flight data
-//        Runnable flightDataSender = new Runnable() {
-//            @Override
-//            public void run() {
-//                sendFlightData();
-//            }
-//        };
-        runOnUiThread(new Runnable() {
+    private void initGimbalCallback() {
+        Gimbal gimbal = aircraft.getGimbal();
+        gimbal.setStateCallback(new GimbalState.Callback() {
             @Override
-            public void run() {
-                sendFlightData();
+            public void onUpdate(@NonNull GimbalState state) {
+                gimbalState = state;
             }
         });
     }
@@ -788,55 +602,6 @@ public class MainActivity extends FragmentActivity
 //
 //            videoViewCanvas.drawRect(multiplierX * leftX, multiplierY * topY + 250, multiplierX * rightX, multiplierY * bottomY + 250, paint);
 //        }
-    }
-
-    public void createWebSocketClient(String ip, String port) {
-        URI uri;
-        try {
-            uri = new URI("ws://" + ip + ":" + port);
-        } catch (URISyntaxException e) {
-            Log.e(TAG, "Create websocket URI", e);
-            return;
-        }
-
-        webSocketClient = new WebSocketClient(uri) {
-            @Override
-            public void onOpen(ServerHandshake serverHandshake) {
-                Log.i(TAG, "Connected to the DroCo server.");
-                ToastUtils.setResultToToast("Connected to the DroCo server.");
-                // If websocket connection opened, do the custom server handshake
-                doServerHandshake();
-            }
-
-            @Override
-            public void onMessage(String s) {
-                try {
-                    JSONObject receivedMsg = new JSONObject(s);
-                    String msgType = receivedMsg.getString("type");
-                    switch (msgType) {
-                        case "hello_resp":
-                            handleServerHandshake(receivedMsg.getJSONObject("data"));
-                            break;
-                        case "vehicle_detection_rects":
-                            handleVehicleDetecion(receivedMsg.getJSONObject("data"));
-                            break;
-                    }
-                } catch (JSONException e) {
-                    Log.e(TAG, "On message received", e);
-                }
-            }
-
-            @Override
-            public void onClose(int i, String s, boolean b) {
-                Log.i(TAG, "Connection to the DroCo server closed.");
-                ToastUtils.setResultToToast("Connection to the DroCo server closed.");
-            }
-
-            @Override
-            public void onError(Exception e) {
-                Log.i(TAG, e.toString());
-            }
-        };
     }
 
 
@@ -902,7 +667,13 @@ public class MainActivity extends FragmentActivity
             msg.put("type", "flight_data_save_set");
             msg.put("data", flightRecordingOn);
 
-            webSocketClient.send(msg.toString());
+            //webSocketClient.send(msg.toString());
+            outboundClient.sendString(Mono.just(msg.toString()))
+                    .then()
+                    .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
+                    .doOnError(error -> Log.e(TAG, "Failed to send message", error))
+                    .subscribe();
+
         } catch (JSONException e) {
             Log.e(TAG, "Start flight data record", e);
         }
@@ -920,12 +691,19 @@ public class MainActivity extends FragmentActivity
             data.put("state", recordingOn);
             msg.put("data", data);
 
-            webSocketClient.send(msg.toString());
+            //webSocketClient.send(msg.toString());
+            outboundClient.sendString(Mono.just(msg.toString()))
+                    .then()
+                    .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
+                    .doOnError(error -> Log.e(TAG, "Failed to send message", error))
+                    .subscribe();
+
         } catch (JSONException e) {
             Log.e(TAG, "Start recording", e);
         }
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.O)
     @Override
     public void applyInputs(String ip, String port, String rtmp) {
         SharedPreferences.Editor editor = sharedPreferences.edit();
@@ -939,6 +717,9 @@ public class MainActivity extends FragmentActivity
         //serverRTMP = rtmp;
 
         if(aircraftConnected) {
+            if(connectionState == READYSTATE.OPEN) {
+                closeConnection();
+            }
             connectToServer(ip, port);
         }
     }
@@ -952,6 +733,7 @@ public class MainActivity extends FragmentActivity
         takeoffAltitude = Float.parseFloat(altitude);
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.O)
     @Override
     public void onAircraftStatusChanged(String aircraftStatus) {
         switch (aircraftStatus) {
@@ -974,9 +756,9 @@ public class MainActivity extends FragmentActivity
                     connectToServer(serverIP, serverPort);
                 }
 
-                //initPreviewerSurfaceView();
                 initPreviewerTextureView();
                 initVideoFeeder();
+                initGimbalCallback();
 
                 Log.i("MainActivity", "aircraft connected");
                 break;
@@ -993,6 +775,7 @@ public class MainActivity extends FragmentActivity
                 break;
         }
     }
+
 
     private byte[] parseToJPEG(byte[] yuvFrame, int width, int height) {
 
@@ -1021,8 +804,6 @@ public class MainActivity extends FragmentActivity
 
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 
-        //Log.d("MainActivity", "Frame width x height: " + width + "x" + height);
-
         yuvImage.compressToJpeg(new Rect(0,
                 0,
                 width,
@@ -1048,46 +829,30 @@ public class MainActivity extends FragmentActivity
                     Bitmap image = BitmapFactory.decodeByteArray(jpegByte, 0, jpegByte.length);
                     Canvas canvas = fpvJpegTextureView.lockCanvas();
                     if(canvas != null) {
-                        canvas.drawBitmap(image, 0, 0, null);
+                        canvas.drawBitmap(image, (fpvJpegTextureView.getWidth() - width) / 2f, (fpvJpegTextureView.getHeight() - height) / 2f, null);
                         fpvJpegTextureView.unlockCanvasAndPost(canvas);
                     }
                 }
             });
-//            try {
-//                byte[] imageByte = jpegByte;
-//                Bitmap image = BitmapFactory.decodeByteArray(imageByte, 0, imageByte.length);
-//
-//                fpvJpegTextureView.;
-//                fpvJpegView.setImageBitmap(image);
-//            } catch (Exception e) {
-//                Log.e(TAG, "ERROR ImageView Crash");
-//                e.printStackTrace();
-//                Log.e(TAG, e.toString());
-//            }
-
         }
 
         flightDataInterval++;
 
-        if(flightDataInterval >= FLIGHT_INTERVAL) {
+        //if(flightDataInterval >= FLIGHT_INTERVAL) {
             try {
-                Log.d(TAG, "WSRS: " + String.valueOf(webSocketClient.getReadyState()));
+                Log.d(TAG, "WSRS: " + String.valueOf(connectionState));
                 FlightControllerState state = aircraft.getFlightController().getState();
                 LocationCoordinate3D location = state.getAircraftLocation();
                 Attitude attitude = state.getAttitude();
                 float compass = aircraft.getFlightController().getCompass().getHeading();
-                //float altitude = state.getTakeoffLocationAltitude() + location.getAltitude();
-                //float altitude = 221.5f + location.getAltitude();
                 float altitude = takeoffAltitude + location.getAltitude();
-                //float altitude = 343.3f + location.getAltitude();
                 dji.common.gimbal.Attitude gimbalAttitude = gimbalState.getAttitudeInDegrees();
                 Date currentTime = Calendar.getInstance().getTime();
-                //SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX");
                 SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd' 'HH:mm:ss.SSS");
                 latestKnownLatitude = Double.isNaN(location.getLatitude()) ? latestKnownLatitude : location.getLatitude();
                 latestKnownLongitude = Double.isNaN(location.getLongitude()) ? latestKnownLongitude : location.getLongitude();
 
-                if (webSocketClient.getReadyState() == WebSocket.READYSTATE.OPEN) {
+                if (connectionState == READYSTATE.OPEN) {
                     JSONObject msg = new JSONObject();
                     JSONObject data = new JSONObject();
                     JSONObject gps = new JSONObject();
@@ -1130,10 +895,14 @@ public class MainActivity extends FragmentActivity
                         // Put everything together
                         msg.put("data", data);
 
-                        //Log.i(TAG, "Sending flight data");
                         Log.i(TAG, msg.toString());
 
-                        webSocketClient.send(msg.toString());
+                        //webSocketClient.send(msg.toString());
+                        outboundClient.sendString(Mono.just(msg.toString()))
+                                .then()
+                                .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
+                                .doOnError(error -> Log.e(TAG, "Failed to send message", error))
+                                .subscribe();
 
                         flightDataInterval = 0;
                     } catch (Exception e) {
@@ -1143,184 +912,7 @@ public class MainActivity extends FragmentActivity
             } catch (Exception e) {
                 Log.e(TAG, "Flight Data send exception", e);
             }
-        }
-
-
-//        //In this demo, we test the YUV data by saving it into JPG files.
-//        //DJILog.d(TAG, "onYuvDataReceived " + dataSize);
-//        if (yuvFrameCount++ % 30 == 0 && byteBuffer != null) {
-//            final byte[] bytes = new byte[dataSize];
-//            byteBuffer.get(bytes);
-//            //DJILog.d(TAG, "onYuvDataReceived2 " + dataSize);
-//            AsyncTask.execute(new Runnable() {
-//                @Override
-//                public void run() {
-//                    // two samples here, it may has other color format.
-//                    int colorFormat = mediaFormat.getInteger(MediaFormat.KEY_COLOR_FORMAT);
-//                    switch (colorFormat) {
-//                        case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar:
-//                            //NV12
-//                            if (Build.VERSION.SDK_INT <= 23) {
-//                                oldSaveYuvDataToJPEG(bytes, width, height);
-//                            } else {
-//                                newSaveYuvDataToJPEG(bytes, width, height);
-//                            }
-//                            break;
-//                        case MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar:
-//                            //YUV420P
-//                            newSaveYuvDataToJPEG420P(bytes, width, height);
-//                            break;
-//                        default:
-//                            break;
-//                    }
-//                }
-//            });
-//        }
+        //}
     }
-
-//    // For android API <= 23
-//    private void oldSaveYuvDataToJPEG(byte[] yuvFrame, int width, int height){
-//        Log.i("MainActivity", "oldSaveYuvDATA");
-//
-//        if (yuvFrame.length < width * height) {
-//            //DJILog.d(TAG, "yuvFrame size is too small " + yuvFrame.length);
-//            return;
-//        }
-//
-//        byte[] y = new byte[width * height];
-//        byte[] u = new byte[width * height / 4];
-//        byte[] v = new byte[width * height / 4];
-//        byte[] nu = new byte[width * height / 4]; //
-//        byte[] nv = new byte[width * height / 4];
-//
-//        System.arraycopy(yuvFrame, 0, y, 0, y.length);
-//        for (int i = 0; i < u.length; i++) {
-//            v[i] = yuvFrame[y.length + 2 * i];
-//            u[i] = yuvFrame[y.length + 2 * i + 1];
-//        }
-//        int uvWidth = width / 2;
-//        int uvHeight = height / 2;
-//        for (int j = 0; j < uvWidth / 2; j++) {
-//            for (int i = 0; i < uvHeight / 2; i++) {
-//                byte uSample1 = u[i * uvWidth + j];
-//                byte uSample2 = u[i * uvWidth + j + uvWidth / 2];
-//                byte vSample1 = v[(i + uvHeight / 2) * uvWidth + j];
-//                byte vSample2 = v[(i + uvHeight / 2) * uvWidth + j + uvWidth / 2];
-//                nu[2 * (i * uvWidth + j)] = uSample1;
-//                nu[2 * (i * uvWidth + j) + 1] = uSample1;
-//                nu[2 * (i * uvWidth + j) + uvWidth] = uSample2;
-//                nu[2 * (i * uvWidth + j) + 1 + uvWidth] = uSample2;
-//                nv[2 * (i * uvWidth + j)] = vSample1;
-//                nv[2 * (i * uvWidth + j) + 1] = vSample1;
-//                nv[2 * (i * uvWidth + j) + uvWidth] = vSample2;
-//                nv[2 * (i * uvWidth + j) + 1 + uvWidth] = vSample2;
-//            }
-//        }
-//        //nv21test
-//        byte[] bytes = new byte[yuvFrame.length];
-//        System.arraycopy(y, 0, bytes, 0, y.length);
-//        for (int i = 0; i < u.length; i++) {
-//            bytes[y.length + (i * 2)] = nv[i];
-//            bytes[y.length + (i * 2) + 1] = nu[i];
-//        }
-////        Log.d(TAG,
-////                "onYuvDataReceived: frame index: "
-////                        + DJIVideoStreamDecoder.getInstance().frameIndex
-////                        + ",array length: "
-////                        + bytes.length);
-//        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
-//            screenShot(bytes, getApplicationContext().getExternalFilesDir("DJI").getPath() + "/DJI_ScreenShot", width, height);
-//        } else {
-//            screenShot(bytes, Environment.getExternalStorageDirectory() + "/DJI_ScreenShot", width, height);
-//        }
-//    }
-//
-//    private void newSaveYuvDataToJPEG(byte[] yuvFrame, int width, int height){
-//        Log.i("MainActivity", "newSaveYuvData");
-//        if (yuvFrame.length < width * height) {
-//            //DJILog.d(TAG, "yuvFrame size is too small " + yuvFrame.length);
-//            return;
-//        }
-//        int length = width * height;
-//
-//        byte[] u = new byte[width * height / 4];
-//        byte[] v = new byte[width * height / 4];
-//        for (int i = 0; i < u.length; i++) {
-//            v[i] = yuvFrame[length + 2 * i];
-//            u[i] = yuvFrame[length + 2 * i + 1];
-//        }
-//        for (int i = 0; i < u.length; i++) {
-//            yuvFrame[length + 2 * i] = u[i];
-//            yuvFrame[length + 2 * i + 1] = v[i];
-//        }
-//
-//        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
-//            screenShot(yuvFrame, getApplicationContext().getExternalFilesDir("DJI").getPath() + "/DJI_ScreenShot", width, height);
-//        } else {
-//            screenShot(yuvFrame, Environment.getExternalStorageDirectory() + "/DJI_ScreenShot", width, height);
-//        }
-//    }
-//
-//    private void newSaveYuvDataToJPEG420P(byte[] yuvFrame, int width, int height) {
-//        Log.i("MainActivity", "oldSaveYuvDATA_420p");
-//
-//        if (yuvFrame.length < width * height) {
-//            return;
-//        }
-//        int length = width * height;
-//
-//        byte[] u = new byte[width * height / 4];
-//        byte[] v = new byte[width * height / 4];
-//
-//        for (int i = 0; i < u.length; i ++) {
-//            u[i] = yuvFrame[length + i];
-//            v[i] = yuvFrame[length + u.length + i];
-//        }
-//        for (int i = 0; i < u.length; i++) {
-//            yuvFrame[length + 2 * i] = v[i];
-//            yuvFrame[length + 2 * i + 1] = u[i];
-//        }
-//
-//        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.P) {
-//            screenShot(yuvFrame, getApplicationContext().getExternalFilesDir("DJI").getPath() + "/DJI_ScreenShot", width, height);
-//        } else {
-//            screenShot(yuvFrame, Environment.getExternalStorageDirectory() + "/DJI_ScreenShot", width, height);
-//        }
-//    }
-//
-//    /**
-//     * Save the buffered data into a JPG image file
-//     */
-//    private void screenShot(byte[] buf, String shotDir, int width, int height) {
-//        File dir = new File(shotDir);
-//        if (!dir.exists() || !dir.isDirectory()) {
-//            dir.mkdirs();
-//        }
-//        YuvImage yuvImage = new YuvImage(buf,
-//                ImageFormat.NV21,
-//                width,
-//                height,
-//                null);
-//        OutputStream outputFile;
-//        final String path = dir + "/ScreenShot_" + System.currentTimeMillis() + ".jpg";
-//        try {
-//            outputFile = new FileOutputStream(new File(path));
-//        } catch (FileNotFoundException e) {
-//            Log.e(TAG, "test screenShot: new bitmap output file error: " + e);
-//            return;
-//        }
-//        if (outputFile != null) {
-//            yuvImage.compressToJpeg(new Rect(0,
-//                    0,
-//                    width,
-//                    height), 100, outputFile);
-//        }
-//        try {
-//            outputFile.close();
-//        } catch (IOException e) {
-//            Log.e(TAG, "test screenShot: compress yuv image error: " + e);
-//            e.printStackTrace();
-//        }
-//    }
 }
 
