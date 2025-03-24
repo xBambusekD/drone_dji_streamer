@@ -19,11 +19,13 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.util.Log;
+import android.util.Pair;
 import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.ImageView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
@@ -31,6 +33,7 @@ import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.FragmentActivity;
 
 import com.dji.dronedjistreamer.internal.utils.AltitudeDialog;
+import com.dji.dronedjistreamer.internal.utils.FileHelper;
 import com.dji.dronedjistreamer.internal.utils.ServerIPDialog;
 import com.dji.dronedjistreamer.internal.utils.ToastUtils;
 
@@ -50,16 +53,20 @@ import java.time.Duration;
 import java.util.Calendar;
 import java.util.Date;
 
+import dji.common.battery.BatteryState;
 import dji.common.error.DJIError;
 import dji.common.flightcontroller.Attitude;
 import dji.common.flightcontroller.FlightControllerState;
 import dji.common.gimbal.GimbalState;
+import dji.common.remotecontroller.HardwareState;
 import dji.common.util.CommonCallbacks;
+import dji.liveviewar.jni.Vector2;
 import dji.midware.usb.P3.UsbAccessoryService;
 import dji.sdk.camera.VideoFeeder;
 import dji.sdk.codec.DJICodecManager;
 import dji.sdk.gimbal.Gimbal;
 import dji.sdk.products.Aircraft;
+import dji.sdk.remotecontroller.RemoteController;
 import dji.sdk.sdkmanager.DJISDKManager;
 import dji.sdk.sdkmanager.LiveStreamManager;
 import dji.common.flightcontroller.LocationCoordinate3D;
@@ -72,6 +79,7 @@ import reactor.netty.http.websocket.WebsocketOutbound;
 import reactor.util.retry.Retry;
 
 import java.util.Base64;
+import java.util.Objects;
 
 public class MainActivity extends FragmentActivity
         implements View.OnClickListener,
@@ -79,6 +87,7 @@ public class MainActivity extends FragmentActivity
         AircraftStatusReceiver.AircraftStatusListener,
         AltitudeDialog.AltitudeDialogListener,
         DJICodecManager.YuvDataCallback {
+
 
     public static enum READYSTATE {
         NOT_YET_CONNECTED,
@@ -120,6 +129,8 @@ public class MainActivity extends FragmentActivity
 
     private GimbalState gimbalState;
 
+    private BatteryState batterState;
+
     private Handler connectionHandler;
     private final int connectionRetry = 5;
 
@@ -127,6 +138,12 @@ public class MainActivity extends FragmentActivity
     private String aircraftSerialNumber;
 
     private boolean aircraftConnected = false;
+
+    private RemoteController remoteController;
+
+    private Pair<Integer, Integer> leftStick;
+    private Pair<Integer, Integer> rightStick;
+
 
     AircraftStatusReceiver djiStatusReceiver;
 
@@ -149,6 +166,8 @@ public class MainActivity extends FragmentActivity
     protected VideoFeeder.VideoDataListener mReceivedVideoDataListener = null;
 
     private int flightDataInterval = 0;
+
+    private FileHelper fileHelper;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -215,6 +234,8 @@ public class MainActivity extends FragmentActivity
                 ToastUtils.setResultToToast("status changed : " + i);
             }
         };
+
+        fileHelper = new FileHelper(getApplicationContext(), "flight_log_" + new SimpleDateFormat("yyyyMMdd_HHmmss").format(Calendar.getInstance().getTime()) + ".txt");
     }
 
     @Override
@@ -229,6 +250,8 @@ public class MainActivity extends FragmentActivity
     }
 
     private void closeConnection() {
+        fileHelper.close();
+
         if(outboundClient != null) {
             outboundClient.sendClose() // Initiate a close handshake
                     .then()
@@ -549,7 +572,7 @@ public class MainActivity extends FragmentActivity
             data.put("serial", aircraftSerialNumber);
             msg.put("data", data);
 
-
+            fileHelper.writeLine(msg.toString());
             //webSocketClient.send(msg.toString());
             return outbound.sendString(Mono.just(msg.toString()))
                     .then()
@@ -576,6 +599,15 @@ public class MainActivity extends FragmentActivity
             @Override
             public void onUpdate(@NonNull GimbalState state) {
                 gimbalState = state;
+            }
+        });
+    }
+
+    private void initBatteryCallback() {
+        aircraft.getBattery().setStateCallback(new BatteryState.Callback() {
+            @Override
+            public void onUpdate(BatteryState state) {
+                batterState = state;
             }
         });
     }
@@ -622,15 +654,34 @@ public class MainActivity extends FragmentActivity
                 openAltitudeDialog();
                 break;
             case R.id.btn_start_recording:
-                startRecording(v);
+                //startRecording(v);
+                setLogOffPoint(v);
                 break;
             case R.id.btn_flight_data_recording:
-                startFlightDataRecording(v);
+                //startFlightDataRecording(v);
+                setLogOnPoint(v);
                 break;
             case R.id.btn_start_car_detector:
-                startCarDetector(v);
+                //startCarDetector(v);
+                closeLogFile(v);
                 break;
         }
+    }
+
+    private void setLogOffPoint(View v) {
+        fileHelper.writeLine("[OFF POINT]");
+        Toast.makeText(getApplicationContext(), "Setting off point", Toast.LENGTH_LONG).show();
+    }
+
+    private void setLogOnPoint(View v) {
+        fileHelper.writeLine("[ON POINT]");
+        Toast.makeText(getApplicationContext(), "Setting on point", Toast.LENGTH_LONG).show();
+    }
+
+    private void closeLogFile(View v) {
+        fileHelper.close();
+
+        Toast.makeText(getApplicationContext(), "Save file closed", Toast.LENGTH_LONG).show();
     }
 
     private void startCarDetector(View v) {
@@ -667,6 +718,8 @@ public class MainActivity extends FragmentActivity
             msg.put("type", "flight_data_save_set");
             msg.put("data", flightRecordingOn);
 
+
+            fileHelper.writeLine(msg.toString());
             //webSocketClient.send(msg.toString());
             outboundClient.sendString(Mono.just(msg.toString()))
                     .then()
@@ -691,6 +744,8 @@ public class MainActivity extends FragmentActivity
             data.put("state", recordingOn);
             msg.put("data", data);
 
+
+            fileHelper.writeLine(msg.toString());
             //webSocketClient.send(msg.toString());
             outboundClient.sendString(Mono.just(msg.toString()))
                     .then()
@@ -759,6 +814,19 @@ public class MainActivity extends FragmentActivity
                 initPreviewerTextureView();
                 initVideoFeeder();
                 initGimbalCallback();
+                initBatteryCallback();
+
+                remoteController = aircraft.getRemoteController();
+                remoteController.setHardwareStateCallback(new HardwareState.HardwareStateCallback() {
+                    @Override
+                    public void onUpdate(@NonNull HardwareState hardwareState) {
+                        leftStick = Pair.create(hardwareState.getLeftStick().getHorizontalPosition(), hardwareState.getLeftStick().getVerticalPosition());
+                        rightStick = Pair.create(hardwareState.getRightStick().getHorizontalPosition(), hardwareState.getRightStick().getVerticalPosition());
+
+//                        Log.d("RC_Sticks", "Left Stick: (" + leftStickX + ", " + leftStickY + ")");
+//                        Log.d("RC_Sticks", "Right Stick: (" + rightStickX + ", " + rightStickY + ")");
+                    }
+                });
 
                 Log.i("MainActivity", "aircraft connected");
                 break;
@@ -829,7 +897,16 @@ public class MainActivity extends FragmentActivity
                     Bitmap image = BitmapFactory.decodeByteArray(jpegByte, 0, jpegByte.length);
                     Canvas canvas = fpvJpegTextureView.lockCanvas();
                     if(canvas != null) {
-                        canvas.drawBitmap(image, (fpvJpegTextureView.getWidth() - width) / 2f, (fpvJpegTextureView.getHeight() - height) / 2f, null);
+//                        canvas.drawBitmap(image, (fpvJpegTextureView.getWidth() - width) / 2f, (fpvJpegTextureView.getHeight() - height) / 2f, null);
+//                        fpvJpegTextureView.unlockCanvasAndPost(canvas);
+
+                        // Destination rectangle to fit the image to the full screen
+                        Rect destRect = new Rect(0, 0, fpvJpegTextureView.getWidth(), fpvJpegTextureView.getHeight());
+
+                        // Source rectangle (original image size)
+                        Rect srcRect = new Rect(0, 0, image.getWidth(), image.getHeight());
+
+                        canvas.drawBitmap(image, srcRect, destRect, null);
                         fpvJpegTextureView.unlockCanvasAndPost(canvas);
                     }
                 }
@@ -845,25 +922,31 @@ public class MainActivity extends FragmentActivity
                 LocationCoordinate3D location = state.getAircraftLocation();
                 Attitude attitude = state.getAttitude();
                 float compass = aircraft.getFlightController().getCompass().getHeading();
-                float altitude = takeoffAltitude + location.getAltitude();
+                float relativeAltitude = location.getAltitude();
+                float altitude = takeoffAltitude + relativeAltitude;
                 dji.common.gimbal.Attitude gimbalAttitude = gimbalState.getAttitudeInDegrees();
                 Date currentTime = Calendar.getInstance().getTime();
                 SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd' 'HH:mm:ss.SSS");
                 latestKnownLatitude = Double.isNaN(location.getLatitude()) ? latestKnownLatitude : location.getLatitude();
                 latestKnownLongitude = Double.isNaN(location.getLongitude()) ? latestKnownLongitude : location.getLongitude();
+                int remainingBattery = batterState.getChargeRemainingInPercent();
 
-                if (connectionState == READYSTATE.OPEN) {
+                //if (connectionState == READYSTATE.OPEN) {
                     JSONObject msg = new JSONObject();
                     JSONObject data = new JSONObject();
                     JSONObject gps = new JSONObject();
                     JSONObject aircraftOrientation = new JSONObject();
                     JSONObject aircraftVelocity = new JSONObject();
                     JSONObject gimbalOrientation = new JSONObject();
+                    JSONObject sticks = new JSONObject();
+                    JSONObject leftStickJson = new JSONObject();
+                    JSONObject rightStickJson = new JSONObject();
                     try {
                         msg.put("type", "data_broadcast");
                         data.put("client_id", clientID);
                         // Fill altitude
                         data.put("altitude", altitude);
+                        data.put("relative_altitude", relativeAltitude);
                         // Fill GPS data
                         gps.put("latitude", latestKnownLatitude);
                         gps.put("longitude", latestKnownLongitude);
@@ -884,7 +967,24 @@ public class MainActivity extends FragmentActivity
                         gimbalOrientation.put("roll", gimbalAttitude.getRoll());
                         gimbalOrientation.put("yaw", gimbalAttitude.getYaw());
                         gimbalOrientation.put("yaw_relative", gimbalState.getYawRelativeToAircraftHeading());
+
+                        // Fill stick data
+                        leftStickJson.put("x", leftStick.first);
+                        leftStickJson.put("y", leftStick.second);
+                        rightStickJson.put("x", rightStick.first);
+                        rightStickJson.put("y", rightStick.second);
+
+                        sticks.put("left_stick", leftStickJson);
+                        sticks.put("right_stick", rightStickJson);
+
                         data.put("gimbal_orientation", gimbalOrientation);
+
+                        data.put("satellite_count", state.getSatelliteCount());
+                        data.put("gps_signal_level", state.getGPSSignalLevel());
+                        // Battery state
+                        data.put("battery", remainingBattery);
+
+                        data.put("sticks" , sticks);
 
                         // Fill timestamp
                         data.put("timestamp", timestampFormat.format(currentTime));
@@ -897,18 +997,25 @@ public class MainActivity extends FragmentActivity
 
                         Log.i(TAG, msg.toString());
 
+
+                        fileHelper.writeLine(msg.toString());
                         //webSocketClient.send(msg.toString());
-                        outboundClient.sendString(Mono.just(msg.toString()))
-                                .then()
-                                .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
-                                .doOnError(error -> Log.e(TAG, "Failed to send message", error))
-                                .subscribe();
+                        if (connectionState == READYSTATE.OPEN) {
+                            outboundClient.sendString(Mono.just(msg.toString()))
+                                    .then()
+                                    .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
+                                    .doOnError(error -> {
+                                        Log.e(TAG, "Failed to send message", error);
+                                        connectionState = READYSTATE.FAILURE;
+                                    })
+                                    .subscribe();
+                        }
 
                         flightDataInterval = 0;
                     } catch (Exception e) {
                         Log.e(TAG, "Sending flight data", e);
                     }
-                }
+                //}
             } catch (Exception e) {
                 Log.e(TAG, "Flight Data send exception", e);
             }
