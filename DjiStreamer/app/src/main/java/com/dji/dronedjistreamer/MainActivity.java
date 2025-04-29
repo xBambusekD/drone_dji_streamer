@@ -23,8 +23,11 @@ import android.util.Pair;
 import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.ImageView;
+import android.widget.Spinner;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -33,6 +36,7 @@ import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.FragmentActivity;
 
 import com.dji.dronedjistreamer.internal.utils.AltitudeDialog;
+import com.dji.dronedjistreamer.internal.utils.BinaryFileHelper;
 import com.dji.dronedjistreamer.internal.utils.FileHelper;
 import com.dji.dronedjistreamer.internal.utils.ServerIPDialog;
 import com.dji.dronedjistreamer.internal.utils.ToastUtils;
@@ -48,6 +52,7 @@ import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.time.Duration;
 import java.util.Calendar;
@@ -71,6 +76,7 @@ import dji.sdk.sdkmanager.DJISDKManager;
 import dji.sdk.sdkmanager.LiveStreamManager;
 import dji.common.flightcontroller.LocationCoordinate3D;
 
+import dji.ux.widget.FPVOverlayWidget;
 import reactor.core.Disposable;
 import reactor.core.publisher.Mono;
 import reactor.netty.http.client.HttpClient;
@@ -86,7 +92,8 @@ public class MainActivity extends FragmentActivity
         ServerIPDialog.ServerIPDialogListener,
         AircraftStatusReceiver.AircraftStatusListener,
         AltitudeDialog.AltitudeDialogListener,
-        DJICodecManager.YuvDataCallback {
+        DJICodecManager.YuvDataCallback,
+        AdapterView.OnItemSelectedListener {
 
 
     public static enum READYSTATE {
@@ -102,6 +109,7 @@ public class MainActivity extends FragmentActivity
 
     private static final String TAG = MainActivity.class.getName();
     private static final int FLIGHT_INTERVAL = 4;
+
 
     private LiveStreamManager.OnLiveChangeListener listener;
 
@@ -159,6 +167,8 @@ public class MainActivity extends FragmentActivity
 //    private double latestKnownLongitude = 16.603196;
     private double latestKnownLatitude = 49.227240;
     private double latestKnownLongitude = 16.597338;
+    private double latestKnownLatitudeRaw = 49.227240;
+    private double latestKnownLongitudeRaw = 16.597338;
 
     private DJICodecManager codecManager = null;
     private String latestJPEGframe = "";
@@ -168,6 +178,12 @@ public class MainActivity extends FragmentActivity
     private int flightDataInterval = 0;
 
     private FileHelper fileHelper;
+    private BinaryFileHelper fileHelperBinary;
+
+    private Spinner calibrationPointsSpinner;
+
+    private double latitudeOffset = 0;
+    private double longitudeOffset = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -224,7 +240,6 @@ public class MainActivity extends FragmentActivity
         startRecordingBtn.setOnClickListener(this);
         startFlightRecordingBtn.setOnClickListener(this);
         startCarDetectorBtn.setOnClickListener(this);
-
         videoViewRectangles = (ImageView) findViewById(R.id.video_view_rectangles);
         fpvJpegTextureView = (TextureView) findViewById(R.id.fpv_jpeg_video_feed_texture);
 
@@ -235,7 +250,18 @@ public class MainActivity extends FragmentActivity
             }
         };
 
+        calibrationPointsSpinner = (Spinner) findViewById(R.id.calibration_points_spinner);
+        ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(
+                this,
+                R.array.calibrationPoints,
+                android.R.layout.simple_spinner_item
+        );
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        calibrationPointsSpinner.setAdapter(adapter);
+        calibrationPointsSpinner.setOnItemSelectedListener(this);
+
         fileHelper = new FileHelper(getApplicationContext(), "flight_log_" + new SimpleDateFormat("yyyyMMdd_HHmmss").format(Calendar.getInstance().getTime()) + ".txt");
+        fileHelperBinary = new BinaryFileHelper(getApplicationContext(), "flight_log_" + new SimpleDateFormat("yyyyMMdd_HHmmss").format(Calendar.getInstance().getTime()) + ".bin");
     }
 
     @Override
@@ -251,6 +277,7 @@ public class MainActivity extends FragmentActivity
 
     private void closeConnection() {
         fileHelper.close();
+        fileHelperBinary.close();
 
         if(outboundClient != null) {
             outboundClient.sendClose() // Initiate a close handshake
@@ -318,9 +345,9 @@ public class MainActivity extends FragmentActivity
 
             @Override
             public void onReceive(byte[] videoBuffer, int size) {
-                Log.d(TAG, "FPV: new image data received");
+                //Log.d(TAG, "FPV: new image data received");
                 if (codecManager != null) {
-                    Log.d(TAG, "FPV: sending image to codecManager");
+                    //Log.d(TAG, "FPV: sending image to codecManager");
                     codecManager.sendDataToDecoder(videoBuffer, size);
                 }
             }
@@ -669,17 +696,22 @@ public class MainActivity extends FragmentActivity
     }
 
     private void setLogOffPoint(View v) {
-        fileHelper.writeLine("[OFF POINT]");
-        Toast.makeText(getApplicationContext(), "Setting off point", Toast.LENGTH_LONG).show();
+        Date currentTime = Calendar.getInstance().getTime();
+        SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd' 'HH:mm:ss.SSS");
+        fileHelper.writeLine("[EXPERIMENT STOP]: " + timestampFormat.format(currentTime));
+        Toast.makeText(getApplicationContext(), "Experiment stop", Toast.LENGTH_LONG).show();
     }
 
     private void setLogOnPoint(View v) {
-        fileHelper.writeLine("[ON POINT]");
-        Toast.makeText(getApplicationContext(), "Setting on point", Toast.LENGTH_LONG).show();
+        Date currentTime = Calendar.getInstance().getTime();
+        SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd' 'HH:mm:ss.SSS");
+        fileHelper.writeLine("[EXPERIMENT START]: " + timestampFormat.format(currentTime));
+        Toast.makeText(getApplicationContext(), "Experiment start", Toast.LENGTH_LONG).show();
     }
 
     private void closeLogFile(View v) {
         fileHelper.close();
+        fileHelperBinary.close();
 
         Toast.makeText(getApplicationContext(), "Save file closed", Toast.LENGTH_LONG).show();
     }
@@ -889,7 +921,7 @@ public class MainActivity extends FragmentActivity
         byteBuffer.get(bytes);
         byte[] jpegByte = parseToJPEG(bytes, width, height);
 
-        latestJPEGframe = Base64.getEncoder().encodeToString(jpegByte);
+        //latestJPEGframe = Base64.getEncoder().encodeToString(jpegByte);
 
         if(jpegByte != null) {
             runOnUiThread(() -> {
@@ -927,8 +959,12 @@ public class MainActivity extends FragmentActivity
                 dji.common.gimbal.Attitude gimbalAttitude = gimbalState.getAttitudeInDegrees();
                 Date currentTime = Calendar.getInstance().getTime();
                 SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd' 'HH:mm:ss.SSS");
-                latestKnownLatitude = Double.isNaN(location.getLatitude()) ? latestKnownLatitude : location.getLatitude();
-                latestKnownLongitude = Double.isNaN(location.getLongitude()) ? latestKnownLongitude : location.getLongitude();
+                latestKnownLatitudeRaw = Double.isNaN(location.getLatitude()) ? latestKnownLatitudeRaw : location.getLatitude();
+                latestKnownLongitudeRaw = Double.isNaN(location.getLongitude()) ? latestKnownLongitudeRaw : location.getLongitude();
+
+                latestKnownLatitude = latestKnownLatitudeRaw + latitudeOffset;
+                latestKnownLongitude = latestKnownLongitudeRaw + longitudeOffset;
+
                 int remainingBattery = batterState.getChargeRemainingInPercent();
 
                 //if (connectionState == READYSTATE.OPEN) {
@@ -990,26 +1026,51 @@ public class MainActivity extends FragmentActivity
                         data.put("timestamp", timestampFormat.format(currentTime));
 
                         // Fill jpeg frame
-                        data.put("frame", latestJPEGframe);
+                        //data.put("frame", latestJPEGframe);
 
                         // Put everything together
                         msg.put("data", data);
 
-                        Log.i(TAG, msg.toString());
-
-
-                        fileHelper.writeLine(msg.toString());
-                        //webSocketClient.send(msg.toString());
+                        byte[] jsonBytes = msg.toString().getBytes(StandardCharsets.UTF_8);
+                        byte[] jpegBytes = jpegByte;
+                        ByteBuffer buffer = ByteBuffer.allocate(4 + jsonBytes.length + 4 + jpegBytes.length);
+                        // 1. Put 4 bytes: JSON length
+                        buffer.putInt(jsonBytes.length);
+                        // 2. Put JSON bytes
+                        buffer.put(jsonBytes);
+                        // 3. Put 4 bytes: JPEG length
+                        buffer.putInt(jpegBytes.length);
+                        // 4. Put JPEG bytes
+                        buffer.put(jpegBytes);
+                        // 5. Send it
                         if (connectionState == READYSTATE.OPEN) {
-                            outboundClient.sendString(Mono.just(msg.toString()))
+                            outboundClient.sendByteArray(Mono.just(buffer.array()))
                                     .then()
-                                    .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
+                                    .doOnSuccess(unused -> Log.d(TAG, "Binary message sent successfully"))
                                     .doOnError(error -> {
-                                        Log.e(TAG, "Failed to send message", error);
+                                        Log.e(TAG, "Failed to send binary message", error);
                                         connectionState = READYSTATE.FAILURE;
                                     })
                                     .subscribe();
                         }
+
+                        fileHelperBinary.writeBinary(buffer.array());
+
+//                        Log.i(TAG, msg.toString());
+//
+//
+//                        fileHelper.writeLine(msg.toString());
+//                        //webSocketClient.send(msg.toString());
+//                        if (connectionState == READYSTATE.OPEN) {
+//                            outboundClient.sendString(Mono.just(msg.toString()))
+//                                    .then()
+//                                    .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
+//                                    .doOnError(error -> {
+//                                        Log.e(TAG, "Failed to send message", error);
+//                                        connectionState = READYSTATE.FAILURE;
+//                                    })
+//                                    .subscribe();
+//                        }
 
                         flightDataInterval = 0;
                     } catch (Exception e) {
@@ -1020,6 +1081,79 @@ public class MainActivity extends FragmentActivity
                 Log.e(TAG, "Flight Data send exception", e);
             }
         //}
+    }
+
+
+    @Override
+    public void onItemSelected(AdapterView<?> adapterView, View view, int pos, long id) {
+        Log.d(TAG, "Selected item: " + adapterView.getItemAtPosition(pos).toString());
+        double latitudeCalibrationPoint = 0;
+        double longitudeCalibrationPoint = 0;
+
+        switch(adapterView.getItemAtPosition(pos).toString()) {
+            case "none":
+                latitudeCalibrationPoint = 0;
+                longitudeCalibrationPoint = 0;
+                break;
+            case "1_kanal_chodnik":
+                latitudeCalibrationPoint = 49.2272250;
+                longitudeCalibrationPoint = 16.5974175;
+                break;
+            case "1_kanal_kachle":
+                latitudeCalibrationPoint = 49.2272139;
+                longitudeCalibrationPoint = 16.5973358;
+                break;
+            case "1_sloupek_pisek":
+                latitudeCalibrationPoint = 49.2272397;
+                longitudeCalibrationPoint = 16.5972742;
+                break;
+            case "1_kanal_ctverec":
+                latitudeCalibrationPoint = 49.2271797;
+                longitudeCalibrationPoint = 16.5970931;
+                break;
+            case "1_kanal_za_kerem":
+                latitudeCalibrationPoint = 49.2271331;
+                longitudeCalibrationPoint = 16.5969281;
+                break;
+            case "1_kanal_drevo":
+                latitudeCalibrationPoint = 49.2272464;
+                longitudeCalibrationPoint = 16.5971253;
+                break;
+            case "2_sloupek_areal":
+                latitudeCalibrationPoint = 49.2273594;
+                longitudeCalibrationPoint = 16.5967564;
+                break;
+            case "2_kanal_areal":
+                latitudeCalibrationPoint = 49.2274378;
+                longitudeCalibrationPoint = 16.5967697;
+                break;
+            case "2_sloupek_stan":
+                latitudeCalibrationPoint = 49.2274217;
+                longitudeCalibrationPoint = 16.5970072;
+                break;
+            case "2_komin_barak":
+                latitudeCalibrationPoint = 49.2275017;
+                longitudeCalibrationPoint = 16.5971386;
+                break;
+            case "2_kanal_vzadu":
+                latitudeCalibrationPoint = 49.2274561;
+                longitudeCalibrationPoint = 16.5972836;
+                break;
+            case "2_sloupek_bouda":
+                latitudeCalibrationPoint = 49.2276497;
+                longitudeCalibrationPoint = 16.5971400;
+                break;
+        }
+
+        if (latitudeCalibrationPoint != 0 && longitudeCalibrationPoint != 0) {
+            latitudeOffset = latitudeCalibrationPoint - latestKnownLatitudeRaw;
+            longitudeOffset = longitudeCalibrationPoint - latestKnownLongitudeRaw;
+        }
+    }
+
+    @Override
+    public void onNothingSelected(AdapterView<?> adapterView) {
+        Log.d(TAG, "Nothing selected");
     }
 }
 
