@@ -26,9 +26,11 @@ import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.ImageView;
 import android.widget.Spinner;
 import android.widget.Toast;
+import android.widget.ToggleButton;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
@@ -62,6 +64,7 @@ import dji.common.battery.BatteryState;
 import dji.common.error.DJIError;
 import dji.common.flightcontroller.Attitude;
 import dji.common.flightcontroller.FlightControllerState;
+import dji.common.flightcontroller.virtualstick.FlightControlData;
 import dji.common.gimbal.GimbalState;
 import dji.common.remotecontroller.HardwareState;
 import dji.common.util.CommonCallbacks;
@@ -69,6 +72,7 @@ import dji.liveviewar.jni.Vector2;
 import dji.midware.usb.P3.UsbAccessoryService;
 import dji.sdk.camera.VideoFeeder;
 import dji.sdk.codec.DJICodecManager;
+import dji.sdk.flightcontroller.FlightController;
 import dji.sdk.gimbal.Gimbal;
 import dji.sdk.products.Aircraft;
 import dji.sdk.remotecontroller.RemoteController;
@@ -105,8 +109,6 @@ public class MainActivity extends FragmentActivity
         FAILURE
     }
 
-    private boolean RunRTMPStream = false;
-
     private static final String TAG = MainActivity.class.getName();
     private static final int FLIGHT_INTERVAL = 4;
 
@@ -119,14 +121,10 @@ public class MainActivity extends FragmentActivity
 
     private Button startLiveShowBtn;
     private Button stopLiveShowBtn;
-//    private Button isLiveShowOnBtn;
-//    private Button showInfoBtn;
     private Button setServerIPBtn;
     private Button setAltitudeBtn;
-    private Button startRecordingBtn;
-    private Button startFlightRecordingBtn;
-    private Button startCarDetectorBtn;
-    private ImageView videoViewRectangles;
+
+    private ToggleButton flightLogRecordToggle;
 
     private Canvas videoViewCanvas;
     private TextureView fpvJpegTextureView;
@@ -156,7 +154,6 @@ public class MainActivity extends FragmentActivity
     AircraftStatusReceiver djiStatusReceiver;
 
     private String clientID;
-    private String rtmpURL;
 
     private boolean recordingOn = false;
     private boolean flightRecordingOn = false;
@@ -177,13 +174,17 @@ public class MainActivity extends FragmentActivity
 
     private int flightDataInterval = 0;
 
-    private FileHelper fileHelper;
-    private BinaryFileHelper fileHelperBinary;
+    private FileHelper fileHelper = null;
+    private BinaryFileHelper fileHelperBinary = null;
+
+    private boolean logFlight = false;
 
     private Spinner calibrationPointsSpinner;
 
     private double latitudeOffset = 0;
     private double longitudeOffset = 0;
+
+    private boolean droneControlEnabled = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -229,26 +230,29 @@ public class MainActivity extends FragmentActivity
         stopLiveShowBtn = (Button) findViewById(R.id.btn_stop_live_show);
         setServerIPBtn = (Button) findViewById(R.id.btn_set_server_ip);
         setAltitudeBtn = (Button) findViewById(R.id.btn_set_altitude);
-        startRecordingBtn = (Button) findViewById(R.id.btn_start_recording);
-        startFlightRecordingBtn = (Button) findViewById(R.id.btn_flight_data_recording);
-        startCarDetectorBtn = (Button) findViewById(R.id.btn_start_car_detector);
+        flightLogRecordToggle = (ToggleButton) findViewById(R.id.toggle_flight_log_record);
 
         startLiveShowBtn.setOnClickListener(this);
         stopLiveShowBtn.setOnClickListener(this);
         setServerIPBtn.setOnClickListener(this);
         setAltitudeBtn.setOnClickListener(this);
-        startRecordingBtn.setOnClickListener(this);
-        startFlightRecordingBtn.setOnClickListener(this);
-        startCarDetectorBtn.setOnClickListener(this);
-        videoViewRectangles = (ImageView) findViewById(R.id.video_view_rectangles);
-        fpvJpegTextureView = (TextureView) findViewById(R.id.fpv_jpeg_video_feed_texture);
-
-        listener = new LiveStreamManager.OnLiveChangeListener() {
+        flightLogRecordToggle.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             @Override
-            public void onStatusChanged(int i) {
-                ToastUtils.setResultToToast("status changed : " + i);
+            public void onCheckedChanged(CompoundButton compoundButton, boolean isChecked) {
+                if (isChecked) {
+                    fileHelper = new FileHelper(getApplicationContext(), "flight_log_" + new SimpleDateFormat("yyyyMMdd_HHmmss").format(Calendar.getInstance().getTime()) + ".txt");
+                    fileHelperBinary = new BinaryFileHelper(getApplicationContext(), "flight_log_" + new SimpleDateFormat("yyyyMMdd_HHmmss").format(Calendar.getInstance().getTime()) + ".bin");
+                    logFlight = true;
+                } else {
+                    if(logFlight && fileHelper != null && fileHelperBinary != null) {
+                        closeLogFile();
+                    }
+                    logFlight = false;
+                }
             }
-        };
+        });
+
+        fpvJpegTextureView = (TextureView) findViewById(R.id.fpv_jpeg_video_feed_texture);
 
         calibrationPointsSpinner = (Spinner) findViewById(R.id.calibration_points_spinner);
         ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(
@@ -259,9 +263,6 @@ public class MainActivity extends FragmentActivity
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         calibrationPointsSpinner.setAdapter(adapter);
         calibrationPointsSpinner.setOnItemSelectedListener(this);
-
-        fileHelper = new FileHelper(getApplicationContext(), "flight_log_" + new SimpleDateFormat("yyyyMMdd_HHmmss").format(Calendar.getInstance().getTime()) + ".txt");
-        fileHelperBinary = new BinaryFileHelper(getApplicationContext(), "flight_log_" + new SimpleDateFormat("yyyyMMdd_HHmmss").format(Calendar.getInstance().getTime()) + ".bin");
     }
 
     @Override
@@ -276,8 +277,10 @@ public class MainActivity extends FragmentActivity
     }
 
     private void closeConnection() {
-        fileHelper.close();
-        fileHelperBinary.close();
+        if(logFlight && fileHelper != null && fileHelperBinary != null) {
+            fileHelper.close();
+            fileHelperBinary.close();
+        }
 
         if(outboundClient != null) {
             outboundClient.sendClose() // Initiate a close handshake
@@ -359,33 +362,11 @@ public class MainActivity extends FragmentActivity
         }
     }
 
-    @Override
-    public void onAttachedToWindow() {
-        super.onAttachedToWindow();
-
-        if(isLiveStreamManagerOn(false)) {
-            DJISDKManager.getInstance().getLiveStreamManager().registerListener(listener);
-        }
-    }
-
-    @Override
-    public void onDetachedFromWindow() {
-        super.onDetachedFromWindow();
-        if(isLiveStreamManagerOn(false)) {
-            DJISDKManager.getInstance().getLiveStreamManager().unregisterListener(listener);
-        }
-    }
-
     private void startLiveShow() {
-        if(RunRTMPStream) {
-            runRTMPStream();
-        } else {
-            runSyncedJPEGStream();
-        }
+        runSyncedJPEGStream();
     }
 
     private void createCodecManager() {
-
         if(codecManager != null) {
             codecManager.enabledYuvData(true);
             codecManager.setYuvDataCallback(this);
@@ -396,45 +377,8 @@ public class MainActivity extends FragmentActivity
         createCodecManager();
     }
 
-    private void runRTMPStream() {
-
-        if (!isLiveStreamManagerOn(false)) {
-            return;
-        }
-
-        if(isLiveStreamManagerOn(false)) {
-            DJISDKManager.getInstance().getLiveStreamManager().registerListener(listener);
-        }
-
-        ToastUtils.setResultToToast("Checking if streaming is on");
-        if (DJISDKManager.getInstance().getLiveStreamManager().isStreaming()) {
-            ToastUtils.setResultToToast("already started!");
-            return;
-        }
-        new Thread() {
-            @Override
-            public void run() {
-                ToastUtils.setResultToToast("Starting live stream.");
-                DJISDKManager.getInstance().getLiveStreamManager().setLiveUrl(rtmpURL);
-//                DJISDKManager.getInstance().getLiveStreamManager().setLiveVideoBitRateMode(LiveVideoBitRateMode.MANUAL);
-//                DJISDKManager.getInstance().getLiveStreamManager().setLiveVideoResolution(LiveVideoResolution.VIDEO_RESOLUTION_1920_1080);
-//                DJISDKManager.getInstance().getLiveStreamManager().setLiveVideoBitRate(4096);
-                int result = DJISDKManager.getInstance().getLiveStreamManager().startStream();
-                DJISDKManager.getInstance().getLiveStreamManager().setStartTime();
-
-                ToastUtils.setResultToToast("startLive:" + result +
-                        "\n isVideoStreamSpeedConfigurable:" + DJISDKManager.getInstance().getLiveStreamManager().isVideoStreamSpeedConfigurable() +
-                        "\n isLiveAudioEnabled:" + DJISDKManager.getInstance().getLiveStreamManager().isLiveAudioEnabled());
-            }
-        }.start();
-    }
-
     private void stopLiveShow() {
-        if(RunRTMPStream) {
-            stopRTMPStream();
-        } else {
-            stopSyncedJPEGStream();
-        }
+        stopSyncedJPEGStream();
     }
 
     private void stopSyncedJPEGStream() {
@@ -447,31 +391,9 @@ public class MainActivity extends FragmentActivity
         latestJPEGframe = "";
     }
 
-    private void stopRTMPStream() {
-        if (!isLiveStreamManagerOn(false)) {
-            return;
-        }
-        DJISDKManager.getInstance().getLiveStreamManager().stopStream();
-        ToastUtils.setResultToToast("Stop Live Show");
-    }
-
-
-    private boolean isLiveStreamManagerOn(boolean displayMessage) {
-        if (DJISDKManager.getInstance().getLiveStreamManager() == null) {
-            if(displayMessage)
-                ToastUtils.setResultToToast("No live stream manager!");
-            return false;
-        }
-        else {
-            if(displayMessage)
-                ToastUtils.setResultToToast("Live stream manager is ON!");
-        }
-        return true;
-    }
-
     private void openServerIPDialog() {
         ServerIPDialog serverIPDialog = new ServerIPDialog();
-        serverIPDialog.SetHint(serverIP, serverPort, "rtmp://serverIP:1935/live/clientID");
+        serverIPDialog.SetHint(serverIP, serverPort);
         serverIPDialog.show(getSupportFragmentManager(), "server ip dialog");
     }
 
@@ -520,8 +442,15 @@ public class MainActivity extends FragmentActivity
                             case "hello_resp":
                                 handleServerHandshake(receivedMsg.getJSONObject("data"));
                                 break;
-                            case "vehicle_detection_rects":
-                                handleVehicleDetecion(receivedMsg.getJSONObject("data"));
+                            case "enable_control":
+                                handleEnableControl(receivedMsg.getJSONObject("data"));
+                                break;
+                            case "control_command":
+                                if(droneControlEnabled) {
+                                    handleControlCommand(receivedMsg.getJSONObject("data"));
+                                } else {
+                                    Log.d("CONTROLS", "Drone control is not enabled!");
+                                }
                                 break;
                         }
                     } catch (JSONException e) {
@@ -531,6 +460,74 @@ public class MainActivity extends FragmentActivity
                 .subscribe();
 
         return Mono.never();
+    }
+
+    private void handleEnableControl(JSONObject msg) throws JSONException {
+        boolean enable = msg.getBoolean("enable");
+
+        aircraft.getFlightController().setVirtualStickModeEnabled(enable, new CommonCallbacks.CompletionCallback() {
+            @Override
+            public void onResult(DJIError djiError) {
+                if (djiError == null) {
+                    droneControlEnabled = enable;
+                    Toast.makeText(getApplicationContext(),
+                            "Virtual stick mode " + (enable ? "enabled" : "disabled") + " successfully",
+                            Toast.LENGTH_LONG).show();
+                } else {
+                    Toast.makeText(getApplicationContext(),
+                            "Failed to " + (enable ? "enable" : "disable") + " virtual stick mode: " + djiError.getDescription(),
+                            Toast.LENGTH_LONG).show();
+                }
+            }
+        });
+    }
+
+    private void handleControlCommand(JSONObject msg) throws JSONException {
+        Log.d("CONTROLS", msg.toString());
+        if (aircraft == null || aircraft.getFlightController() == null) {
+            Log.e(TAG, "FlightController not available");
+            return;
+        }
+
+        FlightController flightController = aircraft.getFlightController();
+
+        // Parse input values, default to 0 if missing
+        float pitch = (float) msg.optDouble("pitch", 0.0);       // Forward/backward (m/s)
+        float roll = (float) msg.optDouble("roll", 0.0);         // Left/right (m/s)
+        float yaw = (float) msg.optDouble("yaw", 0.0);           // Yaw rate (deg/s)
+        float throttle = (float) msg.optDouble("throttle", 0.0); // Vertical speed (m/s)
+
+        // Construct control command
+        FlightControlData controlData = new FlightControlData(pitch, roll, yaw, throttle);
+
+        Log.d(TAG, controlData.toString());
+
+        // Send command to the drone
+        flightController.sendVirtualStickFlightControlData(controlData, new CommonCallbacks.CompletionCallback() {
+            @Override
+            public void onResult(DJIError djiError) {
+                if (djiError != null) {
+                    Log.e("CONTROLS", "Failed to send control data: " + djiError.getDescription());
+                } else {
+                    Log.d("CONTROLS", String.format("Sent control data - Pitch: %.2f, Roll: %.2f, Yaw: %.2f, Throttle: %.2f",
+                            pitch, roll, yaw, throttle));
+                }
+            }
+        });
+    }
+
+    private void disableVirtualStickMode() {
+        aircraft.getFlightController().setVirtualStickModeEnabled(false, new CommonCallbacks.CompletionCallback() {
+            @Override
+            public void onResult(DJIError djiError) {
+                if (djiError == null) {
+                    Toast.makeText(getApplicationContext(), "Virtual stick mode disabled due to manual override", Toast.LENGTH_LONG).show();
+                    Log.i("RC_OVERRIDE", "Virtual stick mode disabled");
+                } else {
+                    Log.e("RC_OVERRIDE", "Failed to disable virtual stick mode: " + djiError.getDescription());
+                }
+            }
+        });
     }
 
     private double getTakeoffElevationFromGoogleMaps(double latitude, double longitude) {
@@ -599,8 +596,9 @@ public class MainActivity extends FragmentActivity
             data.put("serial", aircraftSerialNumber);
             msg.put("data", data);
 
-            fileHelper.writeLine(msg.toString());
-            //webSocketClient.send(msg.toString());
+            if(logFlight && fileHelper != null && fileHelperBinary != null) {
+                fileHelper.writeLine(msg.toString());
+            }
             return outbound.sendString(Mono.just(msg.toString()))
                     .then()
                     .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
@@ -614,8 +612,6 @@ public class MainActivity extends FragmentActivity
 
     private void handleServerHandshake(JSONObject msg) throws JSONException {
         clientID = msg.getString("client_id");
-        rtmpURL = "rtmp://" + serverIP + ":1935/live/" + clientID;
-        //startLiveShow();
         Log.i(TAG, msg.toString());
         connectionState = READYSTATE.OPEN;
     }
@@ -639,30 +635,6 @@ public class MainActivity extends FragmentActivity
         });
     }
 
-    private void handleVehicleDetecion(JSONObject msg) throws JSONException {
-        Log.i("CAR_DETECTOR", msg.toString());
-        Paint paint = new Paint();
-        paint.setColor(Color.GREEN);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(10);
-
-        videoViewCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-
-//        float multiplierX = fpvView.getWidth() / 1280f;
-//        float multiplierY = fpvView.getHeight() / 720f;
-//
-//        JSONArray rects = msg.getJSONArray("rects");
-//        for (int i = 0; i < rects.length(); i++) {
-//            JSONObject rect = rects.getJSONObject(i);
-//            float leftX = rect.getInt("x");
-//            float topY = rect.getInt("y");
-//            float rightX = leftX + rect.getInt("w");
-//            float bottomY = topY - rect.getInt("h");
-//
-//            videoViewCanvas.drawRect(multiplierX * leftX, multiplierY * topY + 250, multiplierX * rightX, multiplierY * bottomY + 250, paint);
-//        }
-    }
-
 
     @Override
     public void onClick(View v) {
@@ -672,7 +644,6 @@ public class MainActivity extends FragmentActivity
                 break;
             case R.id.btn_stop_live_show:
                 stopLiveShow();
-                //showInfo();
                 break;
             case R.id.btn_set_server_ip:
                 openServerIPDialog();
@@ -680,128 +651,29 @@ public class MainActivity extends FragmentActivity
             case R.id.btn_set_altitude:
                 openAltitudeDialog();
                 break;
-            case R.id.btn_start_recording:
-                //startRecording(v);
-                setLogOffPoint(v);
-                break;
-            case R.id.btn_flight_data_recording:
-                //startFlightDataRecording(v);
-                setLogOnPoint(v);
-                break;
-            case R.id.btn_start_car_detector:
-                //startCarDetector(v);
-                closeLogFile(v);
-                break;
         }
     }
 
-    private void setLogOffPoint(View v) {
-        Date currentTime = Calendar.getInstance().getTime();
-        SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd' 'HH:mm:ss.SSS");
-        fileHelper.writeLine("[EXPERIMENT STOP]: " + timestampFormat.format(currentTime));
-        Toast.makeText(getApplicationContext(), "Experiment stop", Toast.LENGTH_LONG).show();
-    }
-
-    private void setLogOnPoint(View v) {
-        Date currentTime = Calendar.getInstance().getTime();
-        SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd' 'HH:mm:ss.SSS");
-        fileHelper.writeLine("[EXPERIMENT START]: " + timestampFormat.format(currentTime));
-        Toast.makeText(getApplicationContext(), "Experiment start", Toast.LENGTH_LONG).show();
-    }
-
-    private void closeLogFile(View v) {
+    private void closeLogFile() {
         fileHelper.close();
         fileHelperBinary.close();
+
+        fileHelper = null;
+        fileHelperBinary = null;
 
         Toast.makeText(getApplicationContext(), "Save file closed", Toast.LENGTH_LONG).show();
     }
 
-    private void startCarDetector(View v) {
-//        carDetector = !carDetector;
-//        v.setSelected(carDetector);
-//
-//        // Init drawing canvas
-//        Bitmap bitmap = Bitmap.createBitmap(fpvView.getWidth(), fpvView.getHeight(), Bitmap.Config.ARGB_8888);
-//        videoViewCanvas = new Canvas(bitmap);
-//        videoViewRectangles.setImageBitmap(bitmap);
-//
-//        Log.i("CAR_DETECTOR", "width: " + bitmap.getWidth() + " .. height: " + bitmap.getHeight());
-//
-//        JSONObject msg = new JSONObject();
-//        JSONObject data = new JSONObject();
-//        try {
-//            msg.put("type", "vehicle_detection_set");
-//            data.put("drone_stream_id", clientID);
-//            data.put("state", carDetector);
-//            msg.put("data", data);
-//
-//            webSocketClient.send(msg.toString());
-//        } catch (JSONException e) {
-//            Log.e(TAG, "Start car detector", e);
-//        }
-    }
-
-    private void startFlightDataRecording(View v) {
-        flightRecordingOn = !flightRecordingOn;
-        v.setSelected(flightRecordingOn);
-
-        JSONObject msg = new JSONObject();
-        try {
-            msg.put("type", "flight_data_save_set");
-            msg.put("data", flightRecordingOn);
-
-
-            fileHelper.writeLine(msg.toString());
-            //webSocketClient.send(msg.toString());
-            outboundClient.sendString(Mono.just(msg.toString()))
-                    .then()
-                    .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
-                    .doOnError(error -> Log.e(TAG, "Failed to send message", error))
-                    .subscribe();
-
-        } catch (JSONException e) {
-            Log.e(TAG, "Start flight data record", e);
-        }
-    }
-
-    private void startRecording(View v) {
-        recordingOn = !recordingOn;
-        v.setSelected(recordingOn);
-
-        JSONObject msg = new JSONObject();
-        JSONObject data = new JSONObject();
-        try {
-            msg.put("type", "media_record_set");
-            data.put("drone_stream_id", clientID);
-            data.put("state", recordingOn);
-            msg.put("data", data);
-
-
-            fileHelper.writeLine(msg.toString());
-            //webSocketClient.send(msg.toString());
-            outboundClient.sendString(Mono.just(msg.toString()))
-                    .then()
-                    .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
-                    .doOnError(error -> Log.e(TAG, "Failed to send message", error))
-                    .subscribe();
-
-        } catch (JSONException e) {
-            Log.e(TAG, "Start recording", e);
-        }
-    }
-
     @RequiresApi(api = Build.VERSION_CODES.O)
     @Override
-    public void applyInputs(String ip, String port, String rtmp) {
+    public void applyInputs(String ip, String port) {
         SharedPreferences.Editor editor = sharedPreferences.edit();
         editor.putString("serverIP", ip);
         editor.putString("serverPort", port);
-        editor.putString("serverRTMP", rtmp);
         editor.commit();
 
         serverIP = ip;
         serverPort = port;
-        //serverRTMP = rtmp;
 
         if(aircraftConnected) {
             if(connectionState == READYSTATE.OPEN) {
@@ -857,6 +729,13 @@ public class MainActivity extends FragmentActivity
 
 //                        Log.d("RC_Sticks", "Left Stick: (" + leftStickX + ", " + leftStickY + ")");
 //                        Log.d("RC_Sticks", "Right Stick: (" + rightStickX + ", " + rightStickY + ")");
+
+                        if (droneControlEnabled && isManualOverrideDetected(leftStick.first, leftStick.second, rightStick.first, rightStick.second)) {
+                            Log.w("CONTROLS", "Manual input detected! Disabling virtual stick mode.");
+                            disableVirtualStickMode(); // custom method that sets enable = false
+                            droneControlEnabled = false;
+                            // Optionally: notify Unity/server about the override
+                        }
                     }
                 });
 
@@ -876,6 +755,11 @@ public class MainActivity extends FragmentActivity
         }
     }
 
+    private boolean isManualOverrideDetected(float lx, float ly, float rx, float ry) {
+        float threshold = 0.05f; // small deadzone to ignore jitter
+        return Math.abs(lx) > threshold || Math.abs(ly) > threshold ||
+                Math.abs(rx) > threshold || Math.abs(ry) > threshold;
+    }
 
     private byte[] parseToJPEG(byte[] yuvFrame, int width, int height) {
 
@@ -929,9 +813,6 @@ public class MainActivity extends FragmentActivity
                     Bitmap image = BitmapFactory.decodeByteArray(jpegByte, 0, jpegByte.length);
                     Canvas canvas = fpvJpegTextureView.lockCanvas();
                     if(canvas != null) {
-//                        canvas.drawBitmap(image, (fpvJpegTextureView.getWidth() - width) / 2f, (fpvJpegTextureView.getHeight() - height) / 2f, null);
-//                        fpvJpegTextureView.unlockCanvasAndPost(canvas);
-
                         // Destination rectangle to fit the image to the full screen
                         Rect destRect = new Rect(0, 0, fpvJpegTextureView.getWidth(), fpvJpegTextureView.getHeight());
 
@@ -1054,23 +935,10 @@ public class MainActivity extends FragmentActivity
                                     .subscribe();
                         }
 
-                        fileHelperBinary.writeBinary(buffer.array());
+                        if(logFlight && fileHelper != null && fileHelperBinary != null) {
+                            fileHelperBinary.writeBinary(buffer.array());
+                        }
 
-//                        Log.i(TAG, msg.toString());
-//
-//
-//                        fileHelper.writeLine(msg.toString());
-//                        //webSocketClient.send(msg.toString());
-//                        if (connectionState == READYSTATE.OPEN) {
-//                            outboundClient.sendString(Mono.just(msg.toString()))
-//                                    .then()
-//                                    .doOnSuccess(unused -> Log.d(TAG, "Message sent successfully"))
-//                                    .doOnError(error -> {
-//                                        Log.e(TAG, "Failed to send message", error);
-//                                        connectionState = READYSTATE.FAILURE;
-//                                    })
-//                                    .subscribe();
-//                        }
 
                         flightDataInterval = 0;
                     } catch (Exception e) {
@@ -1095,53 +963,13 @@ public class MainActivity extends FragmentActivity
                 latitudeCalibrationPoint = 0;
                 longitudeCalibrationPoint = 0;
                 break;
-            case "1_kanal_chodnik":
+            case "1_brno":
                 latitudeCalibrationPoint = 49.2272250;
                 longitudeCalibrationPoint = 16.5974175;
                 break;
-            case "1_kanal_kachle":
-                latitudeCalibrationPoint = 49.2272139;
-                longitudeCalibrationPoint = 16.5973358;
-                break;
-            case "1_sloupek_pisek":
-                latitudeCalibrationPoint = 49.2272397;
-                longitudeCalibrationPoint = 16.5972742;
-                break;
-            case "1_kanal_ctverec":
-                latitudeCalibrationPoint = 49.2271797;
-                longitudeCalibrationPoint = 16.5970931;
-                break;
-            case "1_kanal_za_kerem":
-                latitudeCalibrationPoint = 49.2271331;
-                longitudeCalibrationPoint = 16.5969281;
-                break;
-            case "1_kanal_drevo":
-                latitudeCalibrationPoint = 49.2272464;
-                longitudeCalibrationPoint = 16.5971253;
-                break;
-            case "2_sloupek_areal":
-                latitudeCalibrationPoint = 49.2273594;
-                longitudeCalibrationPoint = 16.5967564;
-                break;
-            case "2_kanal_areal":
-                latitudeCalibrationPoint = 49.2274378;
-                longitudeCalibrationPoint = 16.5967697;
-                break;
-            case "2_sloupek_stan":
-                latitudeCalibrationPoint = 49.2274217;
-                longitudeCalibrationPoint = 16.5970072;
-                break;
-            case "2_komin_barak":
-                latitudeCalibrationPoint = 49.2275017;
-                longitudeCalibrationPoint = 16.5971386;
-                break;
-            case "2_kanal_vzadu":
-                latitudeCalibrationPoint = 49.2274561;
-                longitudeCalibrationPoint = 16.5972836;
-                break;
-            case "2_sloupek_bouda":
-                latitudeCalibrationPoint = 49.2276497;
-                longitudeCalibrationPoint = 16.5971400;
+            case "2_graz":
+                latitudeCalibrationPoint = 47.058524;
+                longitudeCalibrationPoint = 15.459548;
                 break;
         }
 

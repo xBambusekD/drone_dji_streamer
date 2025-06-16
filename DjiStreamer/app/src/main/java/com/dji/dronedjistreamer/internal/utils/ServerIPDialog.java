@@ -16,12 +16,10 @@ import com.dji.dronedjistreamer.R;
 public class ServerIPDialog extends AppCompatDialogFragment {
     private EditText editServerIP;
     private EditText editServerPort;
-    private EditText editServerRTMP;
     private ServerIPDialogListener listener;
 
     private String serverIP = "";
     private String serverPort = "";
-    private String serverRTMP = "";
 
     @Override
     public Dialog onCreateDialog(Bundle savedInstanceState) {
@@ -43,14 +41,12 @@ public class ServerIPDialog extends AppCompatDialogFragment {
                     public void onClick(DialogInterface dialog, int which) {
                         String ip = editServerIP.getText().toString();
                         String port = editServerPort.getText().toString();
-                        String rtmp = editServerRTMP.getText().toString();
-                        listener.applyInputs(ip, port, rtmp);
+                        listener.applyInputs(ip, port);
                     }
                 });
 
         editServerIP = view.findViewById(R.id.edit_server_ip);
         editServerPort = view.findViewById(R.id.edit_server_port);
-        editServerRTMP = view.findViewById(R.id.edit_server_rtmp);
 
         if(!serverIP.isEmpty()) {
             editServerIP.setHint(serverIP);
@@ -59,10 +55,6 @@ public class ServerIPDialog extends AppCompatDialogFragment {
         if(!serverPort.isEmpty()) {
             editServerPort.setHint(serverPort);
             editServerPort.setText(serverPort);
-        }
-        if(!serverRTMP.isEmpty()) {
-            editServerRTMP.setHint(serverRTMP);
-            editServerRTMP.setText(serverRTMP);
         }
 
         return builder.create();
@@ -80,12 +72,11 @@ public class ServerIPDialog extends AppCompatDialogFragment {
     }
 
     public interface ServerIPDialogListener {
-        void applyInputs(String ip, String port, String rtmp);
+        void applyInputs(String ip, String port);
     }
 
-    public void SetHint(String serverIP, String serverPort, String serverRTMP) {
+    public void SetHint(String serverIP, String serverPort) {
         this.serverIP = serverIP;
         this.serverPort = serverPort;
-        this.serverRTMP = serverRTMP;
     }
 }
