@@ -65,6 +65,10 @@ import dji.common.error.DJIError;
 import dji.common.flightcontroller.Attitude;
 import dji.common.flightcontroller.FlightControllerState;
 import dji.common.flightcontroller.virtualstick.FlightControlData;
+import dji.common.flightcontroller.virtualstick.FlightCoordinateSystem;
+import dji.common.flightcontroller.virtualstick.RollPitchControlMode;
+import dji.common.flightcontroller.virtualstick.VerticalControlMode;
+import dji.common.flightcontroller.virtualstick.YawControlMode;
 import dji.common.gimbal.GimbalState;
 import dji.common.remotecontroller.HardwareState;
 import dji.common.util.CommonCallbacks;
@@ -465,10 +469,15 @@ public class MainActivity extends FragmentActivity
     private void handleEnableControl(JSONObject msg) throws JSONException {
         boolean enable = msg.getBoolean("enable");
 
-        aircraft.getFlightController().setVirtualStickModeEnabled(enable, new CommonCallbacks.CompletionCallback() {
+        FlightController flightController = aircraft.getFlightController();
+        flightController.setVirtualStickModeEnabled(enable, new CommonCallbacks.CompletionCallback() {
             @Override
             public void onResult(DJIError djiError) {
                 if (djiError == null) {
+                    flightController.setYawControlMode(YawControlMode.ANGULAR_VELOCITY);
+                    flightController.setRollPitchCoordinateSystem(FlightCoordinateSystem.BODY);
+                    flightController.setRollPitchControlMode(RollPitchControlMode.VELOCITY);
+                    flightController.setVerticalControlMode(VerticalControlMode.VELOCITY);
                     droneControlEnabled = enable;
                     Toast.makeText(getApplicationContext(),
                             "Virtual stick mode " + (enable ? "enabled" : "disabled") + " successfully",
