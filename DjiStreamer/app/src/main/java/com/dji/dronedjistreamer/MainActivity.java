@@ -506,10 +506,12 @@ public class MainActivity extends FragmentActivity
         float yaw = (float) msg.optDouble("yaw", 0.0);           // Yaw rate (deg/s)
         float throttle = (float) msg.optDouble("throttle", 0.0); // Vertical speed (m/s)
 
-        // Construct control command
-        FlightControlData controlData = new FlightControlData(pitch, roll, yaw, throttle);
+        // According to DJI official documentation, the constructor for FlightControlData should be like this:
+        //FlightControlData controlData = new FlightControlData(pitch, roll, yaw, throttle);
+        // But when testing on DJI Mini 1, the roll is switched with pitch.
+        FlightControlData controlData = new FlightControlData(roll, pitch, yaw, throttle);
 
-        Log.d(TAG, controlData.toString());
+        //Log.d("CONTROLS", controlData.toString());
 
         // Send command to the drone
         flightController.sendVirtualStickFlightControlData(controlData, new CommonCallbacks.CompletionCallback() {
