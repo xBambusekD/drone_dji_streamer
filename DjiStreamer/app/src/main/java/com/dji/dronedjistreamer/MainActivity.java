@@ -70,6 +70,8 @@ import dji.common.flightcontroller.virtualstick.RollPitchControlMode;
 import dji.common.flightcontroller.virtualstick.VerticalControlMode;
 import dji.common.flightcontroller.virtualstick.YawControlMode;
 import dji.common.gimbal.GimbalState;
+import dji.common.gimbal.Rotation;
+import dji.common.gimbal.RotationMode;
 import dji.common.remotecontroller.HardwareState;
 import dji.common.util.CommonCallbacks;
 import dji.liveviewar.jni.Vector2;
@@ -137,6 +139,7 @@ public class MainActivity extends FragmentActivity
     private String serverIP = "";
     private String serverPort = "";
 
+    private Gimbal gimbal;
     private GimbalState gimbalState;
 
     private BatteryState batterState;
@@ -525,6 +528,31 @@ public class MainActivity extends FragmentActivity
                 }
             }
         });
+
+        float gimbalPitch = (float) msg.optDouble("gimbal_pitch", 0.0);
+
+        if (gimbal != null) {
+            Rotation rotation = new Rotation.Builder()
+                    .pitch(gimbalPitch)
+                    .roll(0)
+                    .yaw(0)
+                    .time(1)
+                    .mode(RotationMode.RELATIVE_ANGLE)
+                    .build();
+
+            gimbal.rotate(rotation, new CommonCallbacks.CompletionCallback() {
+                @Override
+                public void onResult(DJIError djiError) {
+                    if (djiError != null) {
+                        Log.e("CONTROLS", "Failed to rotate gimbal: " + djiError.getDescription());
+                    } else {
+                        Log.d("CONTROLS", "Gimbal rotated to pitch: " + gimbalPitch);
+                    }
+                }
+            });
+        } else {
+            gimbal = aircraft.getGimbal();
+        }
     }
 
     private void disableVirtualStickMode() {
@@ -628,7 +656,9 @@ public class MainActivity extends FragmentActivity
     }
 
     private void initGimbalCallback() {
-        Gimbal gimbal = aircraft.getGimbal();
+        if (gimbal == null) {
+            gimbal = aircraft.getGimbal();
+        }
         gimbal.setStateCallback(new GimbalState.Callback() {
             @Override
             public void onUpdate(@NonNull GimbalState state) {
