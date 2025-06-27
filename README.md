@@ -86,6 +86,7 @@ Application based on the DJI Mobile SDK for streaming synchronized video data an
   - **altitude** is AMSL (height above mean sea level), to work, the takeoff altitude needs to be manually set using the button **Altitude**.
   - **relative_altitude** stands for AGL (above ground level) altitude.
   - **sticks** report the current configuration of the physical remote controller. Values are in the range of [-660, 660]. Zero means the sticks are centered, in the default position.
+- JPEG byte array can be directly decoded and displayed in the remote GUI.
  
 ## How to control the drone using virtual sticks
 
