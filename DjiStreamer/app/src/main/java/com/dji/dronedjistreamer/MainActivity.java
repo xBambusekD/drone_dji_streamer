@@ -999,6 +999,7 @@ public class MainActivity extends FragmentActivity
         double latitudeCalibrationPoint = 0;
         double longitudeCalibrationPoint = 0;
 
+        // Put your calibration points here, create as many cases you like
         switch(adapterView.getItemAtPosition(pos).toString()) {
             case "none":
                 latitudeCalibrationPoint = 0;
