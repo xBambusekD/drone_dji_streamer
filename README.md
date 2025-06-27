@@ -6,7 +6,7 @@ Application based on the DJI Mobile SDK for streaming synchronized video data an
 
 ## How to connect to a server and receive the data
 
-- Implement a WebSocket server [here is our Unity example](https://github.com/robofit/drone_vstool/blob/minimal_client/DroCo/Assets/Scripts/WebSocketServer.cs).
+- Implement a WebSocket server, [here is our Unity example](https://github.com/robofit/drone_vstool/blob/minimal_client/DroCo/Assets/Scripts/WebSocketServer.cs).
 - In the drone GUI, click the **Server IP** button and fill in the IP address of the server and port (make sure that the port is open).
 - The drone, as a WebSocket client, tries to establish the connection.
 - If successful, the drone sends a handshake message, with the information about the drone type (ctype 0 means the client is a drone):
